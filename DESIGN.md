@@ -746,12 +746,15 @@ python run.py -q "创建一个文件"
 第 1 轮循环
 ==================================================
 
-[可用工具]:                           # 仅第一轮显示
-   - execute_bash(command): 执行任意 shell 命令...
-   - read_file(path): 读取文件内容...
-   - write_file(path, content): 写入文件内容...
+[API 请求参数]:                       # 仅第一轮显示完整结构
+   system: 你是一个有用的 AI 助手...
+   tools: [
+     - execute_bash(command)
+     - read_file(path)
+     - write_file(path, content)
+   ]
 
-[发送给 LLM 的消息]:
+[messages 对话历史]:
    消息数量: 1
    [0] user: 创建 hello.txt 文件
 
@@ -799,15 +802,18 @@ class Agent:
             loop_count += 1
 
             if self.verbose:
-                # 第一轮显示工具定义
+                # 第一轮显示 API 请求参数结构
                 if loop_count == 1:
-                    print("[可用工具]:")
+                    print("[API 请求参数]:")
+                    print(f"   system: {SYSTEM_PROMPT[:50]}...")
+                    print("   tools: [")
                     for tool in TOOLS:
-                        print(f"   - {tool['name']}(...): {tool['description']}")
+                        print(f"     - {tool['name']}(...)")
+                    print("   ]")
 
-                # 显示消息和响应
-                print(f"[发送给 LLM 的消息]: ...")
-                print(f"[LLM 响应]: stop_reason={response.stop_reason}")
+                # 显示对话历史
+                print("[messages 对话历史]: ...")
+                print("[LLM 响应]: stop_reason=...")
 
             # ... 处理逻辑
 ```
@@ -816,8 +822,9 @@ class Agent:
 
 | 展示内容 | 学习价值 |
 |----------|----------|
-| 可用工具列表 | 理解 LLM 如何"知道"有哪些工具 |
+| API 请求参数结构 | 理解 system/tools/messages 是独立参数 |
+| tools 列表 | 理解 LLM 如何"知道"有哪些工具可用 |
 | stop_reason | 理解 LLM 的决策（继续 vs 结束）|
 | content blocks | 理解响应结构（text + tool_use）|
-| 消息累积 | 理解对话历史如何增长 |
+| messages 累积 | 理解对话历史如何增长 |
 | tool_use_id | 理解请求-响应的关联机制 |
