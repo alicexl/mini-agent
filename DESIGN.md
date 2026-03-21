@@ -722,3 +722,102 @@ messages = [
 2. **消息历史持续累积**：每轮交互都追加到历史中
 3. **LLM 是无状态的**：每次调用都需要完整的历史消息
 4. **id 用于关联**：tool_use_id 让 LLM 知道哪个结果对应哪个调用
+
+---
+
+### 4.6 Verbose 模式
+
+Verbose 模式用于教学和调试，可以展示 Agent 与 LLM 交互的完整过程。
+
+**启用方式**：
+
+```bash
+# 默认开启 verbose
+python run.py "创建一个文件"
+
+# 使用 -q 关闭 verbose
+python run.py -q "创建一个文件"
+```
+
+**Verbose 模式显示内容**：
+
+```
+==================================================
+第 1 轮循环
+==================================================
+
+[可用工具]:                           # 仅第一轮显示
+   - execute_bash(command): 执行任意 shell 命令...
+   - read_file(path): 读取文件内容...
+   - write_file(path, content): 写入文件内容...
+
+[发送给 LLM 的消息]:
+   消息数量: 1
+   [0] user: 创建 hello.txt 文件
+
+[LLM 响应]:
+   stop_reason: tool_use             # 关键：决定下一步
+   content blocks: 2
+   [0] text: 我来帮你创建...
+   [1] tool_use: write_file({'path': 'hello.txt', ...})
+
+[调用工具...]
+  - write_file({'path': 'hello.txt', 'content': 'Hello World'})
+
+[工具执行结果]:
+   tool_use_id: call_xxx              # 与 tool_use 关联
+   content: [成功] 文件已写入...
+
+==================================================
+第 2 轮循环
+==================================================
+
+[发送给 LLM 的消息]:
+   消息数量: 3                        # 注意：消息在累积
+   [0] user: 创建 hello.txt 文件
+   [1] assistant: [复杂内容块 x2]     # 上一轮的 tool_use
+   [2] user: [复杂内容块 x1]          # tool_result
+
+[LLM 响应]:
+   stop_reason: end_turn             # 对话结束
+   content blocks: 1
+   [0] text: 文件已成功创建...
+
+[对话结束]
+```
+
+**代码实现要点**：
+
+```python
+class Agent:
+    def __init__(self, llm_client, verbose=True):  # 默认开启
+        self.verbose = verbose
+
+    def run(self, user_input):
+        loop_count = 0
+        while True:
+            loop_count += 1
+
+            if self.verbose:
+                # 第一轮显示工具定义
+                if loop_count == 1:
+                    print("[可用工具]:")
+                    for tool in TOOLS:
+                        print(f"   - {tool['name']}(...): {tool['description']}")
+
+                # 显示消息和响应
+                print(f"[发送给 LLM 的消息]: ...")
+                print(f"[LLM 响应]: stop_reason={response.stop_reason}")
+
+            # ... 处理逻辑
+```
+
+**Verbose 模式的教学价值**：
+
+| 展示内容 | 学习价值 |
+|----------|----------|
+| 可用工具列表 | 理解 LLM 如何"知道"有哪些工具 |
+| stop_reason | 理解 LLM 的决策（继续 vs 结束）|
+| content blocks | 理解响应结构（text + tool_use）|
+| 消息累积 | 理解对话历史如何增长 |
+| tool_use_id | 理解请求-响应的关联机制 |
