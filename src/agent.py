@@ -58,6 +58,14 @@ class Agent:
                 print(f"\n{'='*50}")
                 print(f"第 {loop_count} 轮循环")
                 print(f"{'='*50}")
+
+                # 只在第一轮显示工具定义
+                if loop_count == 1:
+                    print(f"\n[可用工具]:")
+                    for tool in TOOLS:
+                        params = list(tool['input_schema']['properties'].keys())
+                        print(f"   - {tool['name']}({', '.join(params)}): {tool['description'][:30]}...")
+
                 print(f"\n[发送给 LLM 的消息]:")
                 print(f"   消息数量: {len(self.messages)}")
                 for i, msg in enumerate(self.messages):
