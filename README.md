@@ -74,6 +74,7 @@ python run.py
 
 ```
 Mini Agent 已启动，输入 'quit' 或 'exit' 退出
+提示: 使用 -v 参数可显示详细的 LLM 交互信息
 
 用户: 创建一个 hello.txt 文件，内容是 Hello World
 
@@ -81,14 +82,6 @@ Mini Agent 已启动，输入 'quit' 或 'exit' 退出
   - write_file({'path': 'hello.txt', 'content': 'Hello World'})
 
 助手: 文件 hello.txt 已成功创建，内容为 "Hello World"，共 11 个字符。
-
-用户: 读取 hello.txt 的内容
-
-[调用工具...]
-  - read_file({'path': 'hello.txt'})
-
-助手: 文件内容是：
-Hello World
 
 用户: quit
 再见！
@@ -98,10 +91,38 @@ Hello World
 
 ```bash
 python run.py "列出当前目录的文件"
-
 python run.py "创建一个 test 目录"
-
 python run.py "读取 config.json 文件"
+```
+
+### Verbose 模式（查看 LLM 交互详情）
+
+```bash
+python run.py -v "统计当前目录下有多少个文件"
+```
+
+输出示例：
+```
+==================================================
+第 1 轮循环
+==================================================
+
+[发送给 LLM 的消息]:
+   消息数量: 1
+   [0] user: 统计当前目录下有多少个文件
+
+[LLM 响应]:
+   stop_reason: tool_use
+   content blocks: 2
+   [0] text: 我来帮你统计当前目录下的文件数量
+   [1] tool_use: execute_bash({'command': 'ls -l | grep "^-" | wc -l'})
+
+[调用工具...]
+  - execute_bash({'command': 'ls -l | grep "^-" | wc -l'})
+
+[工具执行结果]:
+   tool_use_id: call_xxx
+   content: 6
 ```
 
 ### 交互命令
