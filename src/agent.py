@@ -21,15 +21,17 @@ SYSTEM_PROMPT = """你是一个有用的 AI 助手，可以通过工具来帮助
 class Agent:
     """Agent 主类，处理与 LLM 的交互循环"""
 
-    def __init__(self, llm_client: LLMClient):
+    def __init__(self, llm_client: LLMClient, verbose: bool = False):
         """
         初始化 Agent
 
         Args:
             llm_client: LLM 客户端实例
+            verbose: 是否显示详细的 LLM 交互信息
         """
         self.llm = llm_client
         self.messages = []
+        self.verbose = verbose
 
     def run(self, user_input: str) -> str:
         """
@@ -48,13 +50,42 @@ class Agent:
         })
 
         # 主循环
+        loop_count = 0
         while True:
+            loop_count += 1
+
+            if self.verbose:
+                print(f"\n{'='*50}")
+                print(f"第 {loop_count} 轮循环")
+                print(f"{'='*50}")
+                print(f"\n[发送给 LLM 的消息]:")
+                print(f"   消息数量: {len(self.messages)}")
+                for i, msg in enumerate(self.messages):
+                    role = msg['role']
+                    content = msg['content']
+                    if isinstance(content, str):
+                        preview = content[:100] + "..." if len(content) > 100 else content
+                        print(f"   [{i}] {role}: {preview}")
+                    else:
+                        print(f"   [{i}] {role}: [复杂内容块 x{len(content)}]")
+
             # 调用 LLM
             response = self.llm.chat(
                 messages=self.messages,
                 tools=TOOLS,
                 system=SYSTEM_PROMPT
             )
+
+            if self.verbose:
+                print(f"\n[LLM 响应]:")
+                print(f"   stop_reason: {response.stop_reason}")
+                print(f"   content blocks: {len(response.content)}")
+                for i, block in enumerate(response.content):
+                    if block.type == "text":
+                        text = block.text[:100] + "..." if len(block.text) > 100 else block.text
+                        print(f"   [{i}] text: {text}")
+                    elif block.type == "tool_use":
+                        print(f"   [{i}] tool_use: {block.name}({block.input})")
 
             # 检查停止原因
             if response.stop_reason == "tool_use":
@@ -63,6 +94,14 @@ class Agent:
 
                 # 执行工具
                 tool_results = self._execute_tools(response.content)
+
+                if self.verbose:
+                    print(f"\n[工具执行结果]:")
+                    for result in tool_results:
+                        content = result['content']
+                        preview = content[:200] + "..." if len(content) > 200 else content
+                        print(f"   tool_use_id: {result['tool_use_id']}")
+                        print(f"   content: {preview}")
 
                 # 添加 assistant 消息
                 self.messages.append({
@@ -78,6 +117,8 @@ class Agent:
 
             elif response.stop_reason == "end_turn":
                 # 对话结束，返回结果
+                if self.verbose:
+                    print(f"\n[对话结束]")
                 return self._extract_text(response.content)
 
             else:
