@@ -61,12 +61,15 @@ class Agent:
 
                 # 只在第一轮显示工具定义
                 if loop_count == 1:
-                    print(f"\n[可用工具]:")
+                    print(f"\n[API 请求参数]:")
+                    print(f"   system: {SYSTEM_PROMPT[:50]}...")
+                    print(f"   tools: [")
                     for tool in TOOLS:
                         params = list(tool['input_schema']['properties'].keys())
-                        print(f"   - {tool['name']}({', '.join(params)}): {tool['description'][:30]}...")
+                        print(f"     - {tool['name']}({', '.join(params)})")
+                    print(f"   ]")
 
-                print(f"\n[发送给 LLM 的消息]:")
+                print(f"\n[messages 对话历史]:")
                 print(f"   消息数量: {len(self.messages)}")
                 for i, msg in enumerate(self.messages):
                     role = msg['role']
