@@ -75,10 +75,30 @@ class Agent:
                     role = msg['role']
                     content = msg['content']
                     if isinstance(content, str):
-                        preview = content[:100] + "..." if len(content) > 100 else content
-                        print(f"   [{i}] {role}: {preview}")
+                        # 简单字符串内容
+                        preview = content[:80] + "..." if len(content) > 80 else content
+                        print(f"   [{i}] {role}: \"{preview}\"")
                     else:
-                        print(f"   [{i}] {role}: [复杂内容块 x{len(content)}]")
+                        # 复杂内容块，展开显示
+                        print(f"   [{i}] {role}: [")
+                        for j, block in enumerate(content):
+                            block_type = getattr(block, 'type', None) or block.get('type', 'unknown')
+                            if block_type == 'text':
+                                text = getattr(block, 'text', '') or block.get('text', '')
+                                text_preview = text[:60] + "..." if len(text) > 60 else text
+                                print(f"         {{type: \"text\", text: \"{text_preview}\"}}")
+                            elif block_type == 'tool_use':
+                                name = getattr(block, 'name', '') or block.get('name', '')
+                                input_data = getattr(block, 'input', {}) or block.get('input', {})
+                                print(f"         {{type: \"tool_use\", name: \"{name}\", input: {input_data}}}")
+                            elif block_type == 'tool_result':
+                                tool_id = getattr(block, 'tool_use_id', '') or block.get('tool_use_id', '')
+                                result = getattr(block, 'content', '') or block.get('content', '')
+                                result_preview = result[:50] + "..." if len(str(result)) > 50 else result
+                                print(f"         {{type: \"tool_result\", tool_use_id: \"{tool_id[:20]}...\", content: \"{result_preview}\"}}")
+                            else:
+                                print(f"         {block}")
+                        print(f"       ]")
 
             # 调用 LLM
             response = self.llm.chat(
