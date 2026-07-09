@@ -1,170 +1,37 @@
-# Mini Agent
+# mini-agent — 从 0 到 1 拆解 Agent 的底层原理
 
-一个极简的 AI Agent，通过 LLM 交互执行本地工具。
+> 用 7 个递进的最简 demo 把 Claude Code / Cursor / Devin 这类"自动干活"工具的底层机制完全拆开。
 
-## 功能
+📖 **[完整总览 → demo1-7-总览.md](demo1-7-总览.md)**
 
-- 🤖 基于 Claude 模型的智能对话
-- 🛠️ 三个核心工具：执行命令、读写文件
-- 🔄 自动循环直到任务完成
-- 💬 支持交互模式和单次执行模式
+## 目录
 
-## 安装
+| Demo | 主题 | 关键能力 |
+|---|---|---|
+| [demo1](demo1) | LLM × 工具 × 循环 | ReAct、本地工具 |
+| [demo2](demo2) | 记忆 × 规划 | `agent_memory.md`、手动 Plan |
+| [demo3](demo3) | Rules × MCP | 行为约束、JSON-RPC 远程工具、Plan 自动决策 |
+| [demo4](demo4) | Subagent 分工 | 主 Agent 派生一次性独立 Subagent |
+| [demo5](demo5) | Team 协作 + 事件驱动 | 持久 Agent + 状态机 + 质检员持续监听 |
+| [demo6](demo6) | 上下文压缩 | `compact_messages` 动态压缩对话历史 |
+| [demo7](demo7) | 安全边界 | 三道防线：黑名单 / 用户确认 / 输出截断 |
+
+## 快速开始
 
 ```bash
-# 克隆仓库
-git clone https://github.com/alicexl/mini-agent.git
-cd mini-agent
+# 1. 配置 API Key（环境变量，不要写进代码）
+export ANTHROPIC_API_KEY=xxx
 
-# 安装依赖
+# 2. 进入任一 demo 目录运行
+cd demo1
 pip install -r requirements.txt
+python agent.py
 ```
 
-## 配置
+每个 demo 目录下有 `讲稿.md`（教学讲稿）和 `README.md`（技术参考）。
 
-### 环境变量（推荐）
+## 学习路径
 
-```bash
-# 必填：API Key
-export ANTHROPIC_API_KEY=your_api_key_here
+推荐按编号顺序学习——每个 demo 都在前一个的基础上做"一减一加"，演进逻辑清晰。
 
-# 可选：自定义 API 地址（默认使用官方地址）
-export ANTHROPIC_BASE_URL=https://api.anthropic.com
-
-# 可选：模型名称（默认 claude-sonnet-4-6）
-export ANTHROPIC_MODEL=claude-sonnet-4-6
-```
-
-Windows:
-```cmd
-set ANTHROPIC_API_KEY=your_api_key_here
-set ANTHROPIC_BASE_URL=https://api.anthropic.com
-set ANTHROPIC_MODEL=claude-sonnet-4-6
-```
-
-### 代码中传入
-
-```python
-from src.llm_client import LLMClient
-from src.agent import Agent
-
-llm_client = LLMClient(
-    api_key="your_api_key",           # 必填
-    base_url="https://api.anthropic.com",  # 可选
-    model="claude-sonnet-4-6"         # 可选
-)
-agent = Agent(llm_client)
-```
-
-### 参数说明
-
-| 参数 | 环境变量 | 默认值 | 说明 |
-|------|----------|--------|------|
-| `api_key` | `ANTHROPIC_API_KEY` | - | API 密钥（必填） |
-| `base_url` | `ANTHROPIC_BASE_URL` | 官方地址 | API 服务地址 |
-| `model` | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | 模型名称 |
-
-## 使用
-
-### 交互模式
-
-```bash
-python run.py
-```
-
-```
-Mini Agent 已启动，输入 'quit' 或 'exit' 退出
-提示: 使用 -v 参数可显示详细的 LLM 交互信息
-
-用户: 创建一个 hello.txt 文件，内容是 Hello World
-
-[调用工具...]
-  - write_file({'path': 'hello.txt', 'content': 'Hello World'})
-
-助手: 文件 hello.txt 已成功创建，内容为 "Hello World"，共 11 个字符。
-
-用户: quit
-再见！
-```
-
-### 单次执行模式
-
-```bash
-python run.py "列出当前目录的文件"
-python run.py "创建一个 test 目录"
-python run.py "读取 config.json 文件"
-```
-
-### Verbose 模式（查看 LLM 交互详情）
-
-```bash
-python run.py -v "统计当前目录下有多少个文件"
-```
-
-输出示例：
-```
-==================================================
-第 1 轮循环
-==================================================
-
-[发送给 LLM 的消息]:
-   消息数量: 1
-   [0] user: 统计当前目录下有多少个文件
-
-[LLM 响应]:
-   stop_reason: tool_use
-   content blocks: 2
-   [0] text: 我来帮你统计当前目录下的文件数量
-   [1] tool_use: execute_bash({'command': 'ls -l | grep "^-" | wc -l'})
-
-[调用工具...]
-  - execute_bash({'command': 'ls -l | grep "^-" | wc -l'})
-
-[工具执行结果]:
-   tool_use_id: call_xxx
-   content: 6
-```
-
-### 交互命令
-
-| 命令 | 说明 |
-|------|------|
-| `quit` / `exit` / `q` | 退出程序 |
-| `clear` | 清空对话历史 |
-
-## 工具说明
-
-| 工具 | 功能 | 参数 |
-|------|------|------|
-| `execute_bash` | 执行 shell 命令 | `command`: 命令字符串 |
-| `read_file` | 读取文件内容 | `path`: 文件路径 |
-| `write_file` | 写入文件内容 | `path`: 文件路径, `content`: 文件内容 |
-
-## 项目结构
-
-```
-mini-agent/
-├── run.py                 # 主入口
-├── requirements.txt       # 依赖
-├── DESIGN.md              # 设计文档
-└── src/
-    ├── llm_client.py      # LLM 客户端
-    ├── agent.py           # Agent 循环
-    └── tools/
-        ├── definitions.py # 工具定义
-        └── executor.py    # 工具实现
-```
-
-## 测试
-
-```bash
-python -m pytest test/ -v
-```
-
-## 了解更多
-
-详细的设计思路和源码解读，请参阅 [DESIGN.md](DESIGN.md)
-
-## License
-
-MIT
+详细的学习路径、能力矩阵、三种拆任务机制对比见 **[总览页](demo1-7-总览.md)**。
