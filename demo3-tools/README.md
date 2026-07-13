@@ -1,50 +1,46 @@
-# Demo3 — Rules + MCP
+# Demo3 — 工具扩展轴
 
-> 在 demo2 基础上增加 **Rules（行为约束）** 和 **MCP（外部工具协议）**，并把 plan 从手动开关改为 LLM 自动决策。
+> 在 demo2-memory（base × 记忆）基础上叠加「工具轴」：新增本地 `edit` 工具 + 接入 MCP 外部工具协议。
 
 ## 文档导航
 
-- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（8 章）
+- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（7 章）
   1. 结论：demo3 vs demo2
-  2. Rules：上下文约束
+  2. 本地工具扩展：edit（string replacement）
   3. MCP 协议：从函数调用到 RPC
   4. MCP Server 实现
   5. Agent 端：MCP Client + 工具合并
-  6. Plan 决策：从手动开关到顶层分叉
-  7. 真实案例：plan 拆步骤后跑通
-  8. 总结与下一节预告
+  6. 真实案例：edit 精细修改 + MCP 远程调用
+  7. 总结与下一节预告
 
 ## 关键文件
 
 | 文件 | 说明 |
 |---|---|
-| `agent.py` | Agent 主程序（Part 1-7：客户端 / 本地工具 / Rules 加载 / 记忆 / MCP Client / 工具合并 / 主循环） |
+| `agent.py` | Agent 主程序（Part 1-7：客户端 / 本地工具（含 edit）/ 工具实现 / 记忆+上下文 / MCP Client / 工具合并 / 主循环） |
 | `mcp_server.py` | MCP Server（HTTP + JSON-RPC 2.0，暴露 add / multiply / weather 三个工具） |
-| `.agent/rules.md` | Rules 规范文件（普通 Markdown），启动时拼进 system prompt |
-| `.agent/skills/` | Skills 占位目录（demo4 主题） |
 | `讲稿.md` | 教学讲稿 |
 | `agent_memory.md` | 运行时生成的长期记忆文件（已 gitignore） |
 
 ## 设计要点
 
-### Rules
+### 本地工具扩展：edit
 
-- 规则文件位置：`.agent/rules.md`（普通 Markdown，非配置文件）
-- 生效方式：`build_system_prompt()` 启动时读取该文件，拼到 system prompt 后缀
-- System prompt 分三层：基础 prompt → Rules → 记忆（沿用 demo2 的 Progressive Context）
+- demo1 的 3 件套（execute_bash / read_file / write_file）保留不变
+- demo3 新增 `edit`——精确替换文件中的一段文本（string replacement）
+- 与 write_file 的核心区别：
+  - `write_file`：发整文件内容 → 重写整文件（适合创建新文件）
+  - `edit`：只发 old + new 两段 → 在原文件上做替换（适合改一行 / 改一个值）
+- 默认只替换第一处；`replace_all=true` 替换全部匹配
+- 设计动机与 Claude Code 的 Edit 工具一致——对大文件做小改动时节省 token
 
-### MCP
+### MCP（外部工具协议）
 
 - 协议：JSON-RPC 2.0 over HTTP，统一端点 `POST /mcp`，按 `method` 字段分发
 - 三个核心 method：`initialize`（握手）→ `tools/list`（工具发现）→ `tools/call`（工具调用）
 - 工具合并：MCP server 的 schema 与本地工具都用 `input_schema`，合并就是 list 拼接（`merge_tools`）
 - 路由：`_dispatch_tool` 按 tool name 二选一——本地函数直接调用，MCP 工具走 JSON-RPC POST
-
-### Plan 自动决策
-
-- plan 从用户手动开关（demo2 的 `--plan` / `/plan`）改为 `run_agent` 顶层 1 轮决策的分叉点
-- LLM 第 1 轮看到含 `plan` 的工具列表，自主判断：复杂任务调 plan 拆步骤，简单任务直接走 ReAct
-- 两条路径共用 `run_agent_steps`（共享 messages 的 ReAct 子循环），只是工具集不同（plan 场景去掉 plan 工具，禁止嵌套）
+- 降级模式：MCP Server 未启动时，Agent 自动降级为仅本地工具模式（4 个工具）
 
 ## 运行
 
