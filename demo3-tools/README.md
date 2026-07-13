@@ -1,11 +1,11 @@
 # Demo3 — 工具扩展轴
 
-> 在 demo2-memory（base × 记忆）基础上叠加「工具轴」：新增本地 `edit` 工具 + 接入 MCP 外部工具协议。
+> 在 demo1-react（base）上独立叠加「工具轴」：新增本地 `edit` 工具 + 接入 MCP 外部工具协议。
 
 ## 文档导航
 
 - **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（7 章）
-  1. 结论：demo3 vs demo2
+  1. 结论：demo3 vs demo1
   2. 本地工具扩展：edit（string replacement）
   3. MCP 协议：从函数调用到 RPC
   4. MCP Server 实现
@@ -17,10 +17,9 @@
 
 | 文件 | 说明 |
 |---|---|
-| `agent.py` | Agent 主程序（Part 1-7：客户端 / 本地工具（含 edit）/ 工具实现 / 记忆+上下文 / MCP Client / 工具合并 / 主循环） |
+| `agent.py` | Agent 主程序（Part 1-5：客户端 / 本地工具（含 edit）/ 工具实现 / MCP Client / 主循环） |
 | `mcp_server.py` | MCP Server（HTTP + JSON-RPC 2.0，暴露 add / multiply / weather 三个工具） |
 | `讲稿.md` | 教学讲稿 |
-| `agent_memory.md` | 运行时生成的长期记忆文件（已 gitignore） |
 
 ## 设计要点
 
@@ -38,7 +37,7 @@
 
 - 协议：JSON-RPC 2.0 over HTTP，统一端点 `POST /mcp`，按 `method` 字段分发
 - 三个核心 method：`initialize`（握手）→ `tools/list`（工具发现）→ `tools/call`（工具调用）
-- 工具合并：MCP server 的 schema 与本地工具都用 `input_schema`，合并就是 list 拼接（`merge_tools`）
+- 工具合并：MCP server 的 schema 与本地工具都用 `input_schema`，合并就是直接 `+` 拼接
 - 路由：`_dispatch_tool` 按 tool name 二选一——本地函数直接调用，MCP 工具走 JSON-RPC POST
 - 降级模式：MCP Server 未启动时，Agent 自动降级为仅本地工具模式（4 个工具）
 
