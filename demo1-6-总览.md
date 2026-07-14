@@ -99,7 +99,7 @@ demo6  = base × 约束            （Permission 规则 + Sandbox 隔离 + Hook 
 | demo1 | `demo1-react/agent.py` | — | `demo1-react/讲稿.md` |
 | demo2 | `demo2-memory/agent.py` | `agent_memory.md`（运行时生成） | `demo2-memory/讲稿.md` |
 | demo3 | `demo3-tools/agent.py` + `demo3-tools/mcp_server.py` | — | `demo3-tools/讲稿.md` |
-| demo4 | `demo4-plan/agent.py` | `skills/`（示例 SKILL.md 文件） | `demo4-plan/讲稿.md` |
+| **demo4** | `demo4-plan/agent.py` | `skills/review.md`（示例 Skill——代码审查工作流） | `demo4-plan/讲稿.md` |
 | **demo5** | `demo5-multiagent/agent_sub.py` + `demo5-multiagent/agent_team.py` | —（两份 agent 入口，一份讲稿对照讲） | `demo5-multiagent/讲稿.md` |
 | demo6 | `demo6-safety/agent.py` | `hooks/`（hook 脚本目录）+ `_test_guards.py` | `demo6-safety/讲稿.md` |
 
