@@ -11,3 +11,8 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# 大文件 / 录音不进 git
+*.m4a
+*.mp3
+*.wav
