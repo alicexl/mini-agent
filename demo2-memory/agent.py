@@ -7,7 +7,7 @@ Demo2 - 带记忆的 Agent（记忆轴）
     × 短期记忆（messages 本来就有，但会撑爆上下文窗口）
     × 长期记忆（agent_memory.md，跨任务持久化）
     × 动态压缩（compact_messages，老消息滚动摘要）
-    × Prompt caching（cache_control breakpoint，长 prompt 不爆成本）
+    × Prompt caching（cache_control breakpoint，减少重复传输）
 
 公式：demo2 = base × 记忆
 
@@ -144,11 +144,6 @@ TOOLS = [
 ]
 
 SYSTEM_PROMPT_BASE = """你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。
-
-你有以下工具可以使用：
-1. execute_bash: 执行 shell 命令
-2. read_file: 读取文件内容
-3. write_file: 写入文件内容
 
 请根据用户需求选择合适的工具完成任务，执行完毕后总结结果并回复用户。"""
 
@@ -309,9 +304,9 @@ def build_system_prompt(verbose: bool = False) -> str:
 # 两个核心机制：
 #
 #   (A) Prompt caching（cache_control breakpoint）
-#       长.system prompt + 历史 memory 每轮请求都重发 → 成本爆炸。
+#       长 system prompt + 历史 memory 每轮请求都重发 → 重复传输。
 #       Anthropic API 支持在 system blocks 上加 cache_control 标记，
-#       第一次请求创建缓存（5min TTL，收费 1.25×），后续命中缓存按 0.1× 计费。
+#       第一次请求创建缓存（5min TTL），后续命中缓存时服务端直接复用，无需重传。
 #       Claude Code 每次请求都用 cache_control，工业 Agent 必备。
 #
 #   (B) compact_messages（动态压缩）
@@ -484,9 +479,9 @@ def _print_cache_stats(usage, verbose: bool = True) -> None:
     input_tokens = getattr(usage, "input_tokens", 0) or 0
 
     if cache_create > 0:
-        print(f"  [cache] 创建缓存 {cache_create} tokens（1.25× 计费）+ 输入 {input_tokens}")
+        print(f"  [cache] 创建缓存 {cache_create} tokens + 输入 {input_tokens}")
     elif cache_read > 0:
-        print(f"  [cache] 命中缓存 {cache_read} tokens（0.1× 计费）+ 输入 {input_tokens} ✓")
+        print(f"  [cache] 命中缓存 {cache_read} tokens + 输入 {input_tokens} ✓")
     elif USE_CACHE_CONTROL:
         # cache_control 发了但本轮网关没返回命中数据——可能是网关内部缓存策略（如
         # 大小上限 / TTL 短），也可能是兼容网关根本不实现 caching 后端。
