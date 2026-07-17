@@ -318,9 +318,8 @@ def build_system_prompt(verbose: bool = False) -> str:
 #       Claude Code 每次请求都用 cache_control，工业 Agent 必备。
 #
 #   (B) compact_messages（动态压缩）
-#       多轮 ReAct 把 messages 撑爆上下文窗口（如 200K）。
+#       多轮 ReAct 把 messages 撑爆上下文窗口（如 1M）。
 #       达到阈值时，把老消息让 LLM 摘要成一段，保留最近 N 条原始消息。
-#       这是 demo6「会话级 PreCompact hook」的简化版。
 
 # 压缩触发阈值（消息条数）。生产级按 token 占比触发（见总览第八节）。
 COMPACT_THRESHOLD_MESSAGES = 20
