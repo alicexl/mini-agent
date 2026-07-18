@@ -3,7 +3,7 @@
 """
 Demo2 - 带记忆的 Agent（记忆轴）
 
-在 demo1（base = LLM × 工具 × 循环）基础上叠加「记忆轴」：
+在 demo1（base = LLM × 工具 × 循环 × 状态）基础上叠加「记忆轴」：
     × 短期记忆（messages 本来就有，但会撑爆上下文窗口）
     × 长期记忆（agent_memory.md，跨任务持久化）
     × 动态压缩（compact_messages，老消息滚动摘要）

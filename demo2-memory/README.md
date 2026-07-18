@@ -1,6 +1,6 @@
 # Demo2 — 记忆轴
 
-> 在 demo1（base = LLM × 工具 × 循环）基础上叠加「记忆轴」：让 Agent **记得过去**（长期记忆）、**不爆上下文**（动态压缩）、**跑得起长 prompt**（cache_control 缓存）。
+> 在 demo1（base = LLM × 工具 × 循环 × 状态）基础上叠加「记忆轴」：让 Agent **记得过去**（长期记忆）、**不爆上下文**（动态压缩）、**跑得起长 prompt**（cache_control 缓存）。
 >
 > 公式：`demo2 = base × 记忆`
 
