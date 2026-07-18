@@ -7,6 +7,8 @@ __pycache__/
 # 运行时产物
 **/todos.md
 **/agent_memory.md
+**/.demo6_hook_log
+**/test_dir/
 
 # OS
 .DS_Store
