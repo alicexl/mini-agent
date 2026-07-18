@@ -330,12 +330,13 @@ def check_sandbox(command: str) -> tuple:
 
 
 def hook_block_secret_write(tool_name: str, tool_input: dict) -> dict:
-    """Pre 示例：拦截写入含敏感关键词的文件。"""
+    """Pre 示例：拦截写入含敏感关键词的文件。大小写不敏感匹配。"""
     if tool_name != "write_file":
         return {"decision": "pass"}
     content = tool_input.get("content", "")
-    for secret in ("PASSWORD", "API_KEY=", "PRIVATE KEY", "BEGIN RSA"):
-        if secret in content:
+    content_lower = content.lower()
+    for secret in ("password", "api_key=", "private key", "begin rsa"):
+        if secret in content_lower:
             return {
                 "decision": "block",
                 "message": f"Hook 拦截：内容含敏感关键词 {secret!r}，拒绝写入",
