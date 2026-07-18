@@ -13,7 +13,7 @@
   4. 上下文管理二：Prompt caching（cache_control breakpoint）
   5. 示例解读：长任务实测（compact 触发 + caching 命中）
   6. 局限与工业级演进
-  7. 下一节预告：工具扩展轴（demo3）
+  7. 后续轴预告（demo3-6）
 
 概念讲解、设计原理、演进方向全部在讲稿里。本 README 只讲**怎么跑起来**。
 
@@ -52,11 +52,11 @@ API_TIMEOUT_MS  = 3000000                                    # 50 分钟
 
 打开 `agent.py`，把 Part 1 顶部的 `API_KEY = ""` 改成你的 Key。
 
-**方式 2：首次运行交互式提示**
+**方式 2：运行时交互式提示**
 
-`API_KEY` 为空时直接运行 `python agent.py`，会提示输入（仅本次运行有效，不持久化）。
+`API_KEY` 为空时直接运行 `python agent.py`，会提示输入（不持久化，每次运行都要重输）。
 
-> 也支持 `ANTHROPIC_API_KEY` 环境变量临时覆盖。
+> 也支持 `ANTHROPIC_API_KEY` 环境变量临时覆盖（优先级：环境变量 > 代码变量）。
 
 ### 启动 Agent
 
@@ -64,7 +64,7 @@ API_TIMEOUT_MS  = 3000000                                    # 50 分钟
 python agent.py
 ```
 
-进入交互模式后输入任意任务。
+进入交互模式后输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」、「读 README.md 并总结要点」等）。任务结束后自动追加到 `agent_memory.md`，下次启动时作为 Progressive Context 加载进 system prompt。
 
 | 命令 | 作用 |
 |---|---|
