@@ -42,9 +42,9 @@ from anthropic import Anthropic
 API_KEY = ""
 
 # 默认配置（一般无需修改）
-BASE_URL       = "https://open.bigmodel.cn/api/anthropic"
-MODEL          = "glm-5.2"
-API_TIMEOUT_MS = 3000000
+BASE_URL       = "https://open.bigmodel.cn/api/anthropic"   # 智谱 BigModel Anthropic 兼容网关
+MODEL          = "glm-5.2"                                  # 模型名
+API_TIMEOUT_MS = 3000000                                    # 单次请求超时（毫秒），3000000ms = 50 分钟
 
 # MCP Server 地址（对应 mcp_server.py 默认监听）
 MCP_URL = "http://127.0.0.1:8888/mcp"
@@ -154,17 +154,7 @@ LOCAL_TOOLS = [
     },
 ]
 
-SYSTEM_PROMPT = """你是一个有用的助手，可以通过本地工具与远程 MCP 服务完成用户任务。
-
-本地工具：
-1. execute_bash: 执行 shell 命令
-2. read_file: 读取文件内容
-3. write_file: 写入文件（整文件覆写）
-4. edit: 精确替换文件中的一段文本（适合小改动，比 write_file 节省 token）
-
-远程 MCP 工具：见启动时打印的工具列表（add / multiply / weather 等）。
-
-请根据任务选择最合适的工具。改文件小改动时优先用 edit 而非 write_file。"""
+SYSTEM_PROMPT = """你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"""
 
 
 # ============================================================

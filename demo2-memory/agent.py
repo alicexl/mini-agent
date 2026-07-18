@@ -290,7 +290,7 @@ def build_system_prompt(verbose: bool = False) -> str:
     if verbose:
         if memory:
             n_lines = len(memory.splitlines())
-            n_tasks = memory.count("\n## [")
+            n_tasks = sum(1 for line in memory.splitlines() if line.startswith("## ["))
             print(f"[记忆] 已加载 {n_tasks} 条历史任务（{n_lines} 行）作为 Progressive Context:")
             for line in memory.splitlines():
                 if line.startswith("## ["):
@@ -321,8 +321,8 @@ def build_system_prompt(verbose: bool = False) -> str:
 #       达到阈值时，把老消息让 LLM 摘要成一段，保留最近 N 条原始消息。
 
 # 压缩触发阈值（消息条数）。生产级按 token 占比触发（见总览第八节）。
-COMPACT_THRESHOLD_MESSAGES = 20
-COMPACT_KEEP_RECENT        = 6   # 压缩时保留最近 N 条原始消息
+COMPACT_THRESHOLD_MESSAGES = 10  # 演示用低阈值，方便短任务就触发一次压缩
+COMPACT_KEEP_RECENT        = 4   # 压缩时保留最近 N 条原始消息
 
 COMPACT_SYSTEM_PROMPT = """你是上下文压缩助手。把下面的 Agent 对话历史压缩成一段简洁的事实摘要。
 

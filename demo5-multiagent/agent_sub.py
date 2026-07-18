@@ -156,12 +156,6 @@ ALL_TOOLS = [
 
 SYSTEM_PROMPT = """你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。
 
-你有以下工具可以使用：
-1. execute_bash: 执行 shell 命令
-2. read_file: 读取文件内容
-3. write_file: 写入文件内容
-4. subagent: 委派一个独立的 Subagent 完成子任务（独立 context、无状态、结束即销毁）
-
 遇到相互独立的子任务时（如「1) 统计文件数；2) 读某文件首行」这种编号列表），
 请为每个子任务派一个 Subagent——它们各自独立干完汇报。
 有链式依赖的任务（先 A 再 B）请自己顺序做。"""
@@ -178,7 +172,11 @@ def execute_bash(command: str) -> str:
     """执行 shell 命令"""
     try:
         result = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=60,
+            command,
+            shell=True,            # 让命令拥有更强能力
+            capture_output=True,
+            text=True,
+            timeout=60,            # 防止死循环 / 长时间阻塞
         )
         output = []
         if result.stdout:

@@ -147,7 +147,11 @@ def execute_bash(command: str) -> str:
     """执行 shell 命令"""
     try:
         result = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=60,
+            command,
+            shell=True,            # 让命令拥有更强能力
+            capture_output=True,
+            text=True,
+            timeout=60,            # 防止死循环 / 长时间阻塞
         )
         output = []
         if result.stdout:
