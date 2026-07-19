@@ -411,11 +411,6 @@ def _find_recent_start(messages: list) -> int:
     return start
 
 
-def should_compact(messages: list) -> bool:
-    """是否需要触发压缩：消息条数超阈值"""
-    return len(messages) >= COMPACT_THRESHOLD_MESSAGES
-
-
 def compact_messages(messages: list, verbose: bool = False) -> list:
     """
     动态压缩 messages：保留最近 N 条，老的让 LLM 摘要成一段。
@@ -553,7 +548,7 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
             _print_messages(messages)
 
         # 2a. 上下文管理：检查是否需要 compact
-        if should_compact(messages):
+        if len(messages) >= COMPACT_THRESHOLD_MESSAGES:
             messages = compact_messages(messages, verbose=verbose)
 
         # 2b. 决策：调 LLM（system 走 cache_control）
