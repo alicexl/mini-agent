@@ -347,28 +347,68 @@ def _build_system_param(system_prompt: str):
 
 
 def _extract_text(content) -> str:
-    """从 message content（str 或 block list）提取纯文本，便于估算/摘要"""
+    """
+    从 message content（str 或 block list）提取纯文本，便于估算/摘要。
+
+    支持三种 content 形态：
+        - str                      → 直接返回
+        - list of dict             → demo2 自己拼的 messages（tool_result 也是 dict）
+        - list of SDK block 对象   → demo1 沿用的 response.content（assistant 回复）
+
+    block 类型处理：
+        text         → 取 text
+        tool_use     → "[调用工具 name]"（含 input 摘要让摘要器看到决策）
+        tool_result  → 取 content（截断到 200 字符，避免污染摘要）
+    """
     if isinstance(content, str):
         return content
+    if not isinstance(content, list):
+        return str(content)
+
     parts = []
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict):
-                t = block.get("type")
-                if t == "text":
-                    parts.append(block.get("text", ""))
-                elif t == "tool_use":
-                    parts.append(f"[调用工具 {block.get('name')}]")
-                elif t == "tool_result":
-                    parts.append(str(block.get("content", ""))[:200])
-            else:
-                # Anthropic SDK 的 block 对象（demo1 沿用）
-                t = getattr(block, "type", None)
-                if t == "text":
-                    parts.append(getattr(block, "text", ""))
-                elif t == "tool_use":
-                    parts.append(f"[调用工具 {getattr(block, 'name', '')}]")
+    for block in content:
+        # dict 和 SDK block 对象统一用 .get / getattr 取字段
+        get = block.get if isinstance(block, dict) else lambda k, d="": getattr(block, k, d)
+        btype = get("type")
+
+        if btype == "text":
+            parts.append(get("text", ""))
+        elif btype == "tool_use":
+            args_preview = str(get("input", ""))[:80]
+            parts.append(f"[调用工具 {get('name', '')}] {args_preview}")
+        elif btype == "tool_result":
+            # tool_result 的 content 可能是 str 或 list of {type:text}
+            rc = get("content", "")
+            parts.append(_extract_text(rc) if isinstance(rc, list) else str(rc)[:200])
     return "\n".join(parts)
+
+
+def _is_tool_result_message(msg) -> bool:
+    """判断 message 是否为「承载 tool_result 的 user 消息」（与触发它的 assistant tool_use 配对）"""
+    role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+    if role != "user":
+        return False
+    content = msg.get("content", []) if isinstance(msg, dict) else getattr(msg, "content", [])
+    if not isinstance(content, list):
+        return False
+    return any(
+        (b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_result"
+        for b in content
+    )
+
+
+def _find_recent_start(messages: list) -> int:
+    """
+    找 recent 段的起始 index（old = messages[:start], recent = messages[start:]）。
+
+    切点不能落在 tool_result 消息上——否则前缀的 summary_msg(user) + ack_msg(assistant)
+    会切断 tool_result 与触发它的 assistant tool_use 的配对，导致 API 报
+    "tool_result without preceding tool_use"。遇到 tool_result 就向前回退一步。
+    """
+    start = max(1, len(messages) - COMPACT_KEEP_RECENT)
+    while start > 1 and _is_tool_result_message(messages[start]):
+        start -= 1
+    return start
 
 
 def estimate_messages_tokens(messages: list) -> int:
@@ -398,13 +438,17 @@ def compact_messages(messages: list, verbose: bool = False) -> list:
     if len(messages) < COMPACT_THRESHOLD_MESSAGES:
         return messages
 
-    old_messages = messages[:-COMPACT_KEEP_RECENT]
-    recent_messages = messages[-COMPACT_KEEP_RECENT:]
+    # 切点保护：不能让 recent 第一条是 tool_result 消息（会切断 tool_use ↔ tool_result 配对）
+    recent_start = _find_recent_start(messages)
+    old_messages = messages[:recent_start]
+    recent_messages = messages[recent_start:]
 
     if verbose:
         old_tokens = estimate_messages_tokens(old_messages)
+        back = len(recent_messages) - COMPACT_KEEP_RECENT
+        back_note = f"（回退 {back} 步避开 tool_result）" if back > 0 else ""
         print(f"\n[compact] 触发：{len(old_messages)} 条老消息（~{old_tokens} tokens）→ 摘要")
-        print(f"[compact] 保留最近 {COMPACT_KEEP_RECENT} 条原始消息")
+        print(f"[compact] 保留最近 {len(recent_messages)} 条原始消息{back_note}")
 
     # 把老消息转成纯文本给 LLM 摘要
     transcript_parts = []
