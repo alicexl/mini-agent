@@ -411,19 +411,6 @@ def _find_recent_start(messages: list) -> int:
     return start
 
 
-def estimate_messages_tokens(messages: list) -> int:
-    """
-    粗略估算 messages 的 token 数。
-    简化模型：中英文混合按 3 字符/token 算（实际 Anthropic tokenizer 更复杂）。
-    生产级用 tiktoken 或 API 返回的 usage 精确值。
-    """
-    total = 0
-    for msg in messages:
-        total += len(_extract_text(msg.get("content", ""))) // 3
-        total += 10  # role / 结构开销
-    return total
-
-
 def should_compact(messages: list) -> bool:
     """是否需要触发压缩：消息条数超阈值"""
     return len(messages) >= COMPACT_THRESHOLD_MESSAGES
@@ -444,10 +431,9 @@ def compact_messages(messages: list, verbose: bool = False) -> list:
     recent_messages = messages[recent_start:]
 
     if verbose:
-        old_tokens = estimate_messages_tokens(old_messages)
         back = len(recent_messages) - COMPACT_KEEP_RECENT
         back_note = f"（回退 {back} 步避开 tool_result）" if back > 0 else ""
-        print(f"\n[compact] 触发：{len(old_messages)} 条老消息（~{old_tokens} tokens）→ 摘要")
+        print(f"\n[compact] 触发：{len(old_messages)} 条老消息 → 摘要")
         print(f"[compact] 保留最近 {len(recent_messages)} 条原始消息{back_note}")
 
     # 把老消息转成纯文本给 LLM 摘要
@@ -483,8 +469,7 @@ def compact_messages(messages: list, verbose: bool = False) -> list:
 
         new_messages = [summary_msg, ack_msg] + recent_messages
         if verbose:
-            new_tokens = estimate_messages_tokens(new_messages)
-            print(f"[compact] 压缩后：{len(new_messages)} 条消息（~{new_tokens} tokens）")
+            print(f"[compact] 压缩后：{len(new_messages)} 条消息")
         return new_messages
 
     except Exception as e:
