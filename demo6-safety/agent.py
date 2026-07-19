@@ -389,6 +389,11 @@ def run_hooks(event: str, tool_name: str, *args) -> dict:
 # ============================================================
 # Part 4: 原始工具实现 + dispatch_tool 统一调度
 # ============================================================
+# 每个工具是一个普通 Python 函数：
+#   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
+#   - 设置超时，防止死循环或长时间阻塞
+#   - shell=True 让命令拥有更强能力（风险换能力）
+#
 # 原始工具函数（_raw_*）与 demo1 字节一致——它们是"裸能力"。
 # dispatch_tool 是 demo6 的核心：把三层安全栈串在"大模型决策 → 工具执行"之间。
 
@@ -543,6 +548,13 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
     """
     运行 Agent 处理一次用户任务。
 
+    Args:
+        user_input: 用户的任务目标
+        verbose: 是否打印每一轮的决策与行动（教学演示建议开启）
+
+    Returns:
+        Agent 的最终文本回复
+
     与 demo1 的唯一差异：工具执行走 dispatch_tool（带三层安全栈），而不是直接 fn(**input)。
     """
     messages = [{"role": "user", "content": user_input}]
@@ -583,24 +595,27 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
 
         tool_results = []
         for block in response.content:
-            if block.type != "tool_use":
-                continue
+            if block.type == "tool_use":
+                # ★ demo6 核心变化：通过 dispatch_tool 把工具名分发到实际函数（带三层安全栈）
+                if verbose:
+                    print(f"\n[执行工具] {block.name}({block.input})")
+                result = dispatch_tool(block.name, block.input, verbose=verbose)
 
-            if verbose:
-                print(f"\n[执行工具] {block.name}({_preview(str(block.input), 80)})")
+                if verbose:
+                    preview = str(result)[:200] + (
+                        "..." if len(str(result)) > 200 else ""
+                    )
+                    print(f"[工具结果] {preview}")
 
-            # ★ demo6 核心变化：fn(**block.input) → dispatch_tool(...)
-            result = dispatch_tool(block.name, block.input, verbose=verbose)
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,  # Tool ID 精确匹配每次调用
+                        "content": result,
+                    }
+                )
 
-            if verbose:
-                print(f"[工具结果] {_preview(result, 200)}")
-
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": str(result),
-            })
-
+        # 把工具结果作为 user 消息追加进 messages，下一轮大模型就能看到
         messages.append({"role": "user", "content": tool_results})
 
     return "[错误] 超过最大循环次数（{}），可能陷入死循环".format(MAX_ITERATIONS)
