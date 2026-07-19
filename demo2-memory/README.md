@@ -76,8 +76,8 @@ python agent.py
 | 参数 | 默认 | 含义 |
 |---|---|---|
 | `MEMORY_WINDOW_LINES` | 50 | 长期记忆加载到 system prompt 的滑动窗口（行数） |
-| `COMPACT_THRESHOLD_MESSAGES` | 20 | messages 条数达此阈值触发 compact_messages |
-| `COMPACT_KEEP_RECENT` | 6 | compact 时保留最近 N 条原始消息 |
+| `COMPACT_THRESHOLD_MESSAGES` | 10 | messages 条数达此阈值触发 compact_messages |
+| `COMPACT_KEEP_RECENT` | 4 | compact 时保留最近 N 条原始消息 |
 | `USE_CACHE_CONTROL` | True | 是否启用 prompt caching；某些兼容网关不支持时可关掉 |
 
 > 运行时会在当前目录生成 `agent_memory.md`（已加入 `.gitignore`），每个用户的记忆不同，不应提交。
