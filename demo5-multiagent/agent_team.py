@@ -28,7 +28,7 @@ Team 模式的升级：
     Part 6: 交互式入口
 
 启动：
-    python agent_team.py
+    python agent_team.py        # 启动交互式对话（输一句执行一句，quit 退出）
 """
 
 import os

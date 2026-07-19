@@ -22,7 +22,7 @@ Demo6 - 带安全约束的 Agent（约束轴）
     Part 6: 交互式入口
 
 启动：
-    python agent.py
+    python agent.py             # 启动交互式对话（输一句执行一句，quit 退出）
 """
 
 import fnmatch

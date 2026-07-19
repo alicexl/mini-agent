@@ -26,7 +26,7 @@ Demo4-plan - 规划轴的 Agent
     Part 5: Agent 主循环（ReAct + Skill body 注入 system prompt）
 
 启动：
-    python agent.py
+    python agent.py             # 启动交互式对话（输一句执行一句，quit 退出）
 """
 
 import os
