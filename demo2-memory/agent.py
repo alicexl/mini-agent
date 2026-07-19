@@ -19,7 +19,7 @@ Demo2 - 带记忆的 Agent（记忆轴）
     Part 6: Agent 主循环（ReAct + compact 触发 + caching 命中统计）
 
 用法：
-    python agent.py             # 启动交互式对话（输一句执行一句，quit 退出）
+    python agent.py
 """
 
 import os

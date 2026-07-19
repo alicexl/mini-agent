@@ -25,7 +25,7 @@ Demo5 - 多 Agent 轴（一）：Subagent 一次性外包
     Part 4: 主循环 + Subagent 循环（共用 _react_loop）
 
 启动：
-    python agent_sub.py         # 启动交互式对话（输一句执行一句，quit 退出）
+    python agent_sub.py
 """
 
 import os
