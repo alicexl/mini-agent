@@ -13,7 +13,6 @@
   4. 上下文管理二：Prompt caching（cache_control breakpoint）
   5. 示例解读：长任务实测（compact 触发 + caching 命中）
   6. 局限与工业级演进
-  7. 后续轴预告（demo3-6）
 
 概念讲解、设计原理、演进方向全部在讲稿里。本 README 只讲**怎么跑起来**。
 
