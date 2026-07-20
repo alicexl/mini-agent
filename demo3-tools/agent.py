@@ -3,22 +3,18 @@
 """
 Demo3-tools - 工具扩展轴的 Agent
 
-在 demo1-react（base）基础上叠加「工具轴」：
-    + 本地工具扩展：edit（string replacement）—— 比 read+write 整文件覆盖更精细
-    + MCP（Model Context Protocol）—— 工具不再硬编码在 Agent 进程，
-      由独立的 HTTP 服务通过 JSON-RPC 2.0 暴露，Agent 远程发现并调用
+公式：demo1 = LLM × 工具 × 循环 × 状态
+      demo3 = base × 工具
 
-公式：demo3 = base × 工具
-
-「工具扩展」的两类增量：
-    (A) 能力维度扩展：edit 提供 read+write 做不到的精细修改（只发改动部分）
-    (B) 协议维度扩展：MCP 让工具可以跨进程 / 跨机器 / 跨语言复用
+「工具轴」两类增量：
+    (A) 能力维度：edit 提供 read+write 做不到的精细修改
+    (B) 协议维度：MCP 让工具可以跨进程 / 跨机器 / 跨语言复用
 
 单文件按 5 个 Part 组织：
     Part 1: LLM 客户端初始化（同 demo1）
     Part 2: 本地工具定义（execute_bash / read_file / write_file + 新增 edit）
     Part 3: 本地工具实现 + 路由表
-    Part 4: MCP 客户端（mcp_send：JSON-RPC 2.0 over HTTP）
+    Part 4: MCP 客户端（JSON-RPC 2.0 over HTTP Transport）
     Part 5: Agent 主循环（ReAct，本地/MCP 统一分发）
 
 启动顺序：
@@ -111,12 +107,6 @@ def init_client() -> None:
 #
 # demo1 的 3 件套（execute_bash / read_file / write_file）保留不变。
 # demo3 在此基础上**新增 1 个本地工具 edit** —— 精细修改（string replacement）。
-#
-# 为什么需要 edit？
-#   read_file + write_file 改文件的唯一方式是「读全文 → 改一处 → 写全文」。
-#   对 10k 行的文件，每次改一行都要重发 10k 行内容给 LLM + 重写 10k 行到磁盘。
-#   edit 只需要发送「old 段 + new 段」两小段，磁盘上也只重写差异。
-#   这就是 Claude Code 的 Edit 工具的核心设计动机。
 
 LOCAL_TOOLS = [
     {
@@ -300,8 +290,8 @@ LOCAL_FUNCTIONS = {
 # ============================================================
 # 一个最小的 MCP client：所有调用都通过 JSON-RPC 2.0 over HTTP。
 #
-# MCP 协议规定的三个核心 method：
-#   - initialize : 握手 + 协议版本协商（演示版不做鉴权）
+# 本 demo 只实现 MCP 的 tools 能力，涉及三个主要 method：
+#   - initialize : 握手 + 协议版本协商
 #   - tools/list : 拿到 server 端的完整工具 schema 列表
 #   - tools/call : 按名字 + arguments 调用具体工具，返回 content 包装的结果
 #
@@ -343,7 +333,7 @@ class MCPClient:
         return data.get("result", {})
 
     def initialize(self) -> dict:
-        """握手：拿协议版本 + server 能力。真实场景还会做鉴权。"""
+        """握手：协议版本协商 + 拿 server 能力声明。"""
         result = self.send("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities":    {},

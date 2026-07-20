@@ -36,7 +36,7 @@
 ### MCP（外部工具协议）
 
 - 协议：JSON-RPC 2.0 over HTTP，统一端点 `POST /mcp`，按 `method` 字段分发
-- 三个核心 method：`initialize`（握手）→ `tools/list`（工具发现）→ `tools/call`（工具调用）
+- 本 demo 只实现 MCP 的 tools 能力，涉及三个主要 method：`initialize`（握手）→ `tools/list`（工具发现）→ `tools/call`（工具调用）
 - 工具合并：MCP server 的 schema 与本地工具都用 `input_schema`，合并就是直接 `+` 拼接
 - 路由：`_dispatch_tool` 按 tool name 二选一——本地函数直接调用，MCP 工具走 JSON-RPC POST
 - 降级模式：MCP Server 未启动时，Agent 自动降级为仅本地工具模式（4 个工具）

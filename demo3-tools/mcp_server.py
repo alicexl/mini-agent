@@ -3,14 +3,13 @@
 """
 Demo3 - MCP Server（Model Context Protocol）
 
-把工具从「Agent 本地代码」搬到「独立的 HTTP 服务」，Agent 通过 JSON-RPC 2.0
-协议远程发现并调用它们。这就是 MCP 的本质：**工具的能力边界从「同一进程的
-函数调用」扩展到「跨进程 / 跨机器的 RPC 调用」**。
+通过 JSON-RPC 2.0 over HTTP Transport 暴露工具，Agent 远程发现并调用。
+本 demo 只实现 MCP 的 tools 能力。
 
 单文件按 4 个 Part 组织：
-    Part 1: 工具定义（schema + 实现，与 demo1 的本地工具同构）
+    Part 1: 工具定义（schema + 实现）
     Part 2: MCP 协议常量（method 名 / 协议版本）
-    Part 3: JSON-RPC Handler（三大 method：initialize / tools/list / tools/call）
+    Part 3: JSON-RPC Handler（initialize / tools/list / tools/call）
     Part 4: HTTP Server 入口（POST /mcp 接收请求）
 
 启动：
@@ -110,7 +109,7 @@ TOOL_FUNCTIONS = {
 # ============================================================
 # Part 2: MCP 协议常量
 # ============================================================
-# MCP 协议规定了三个核心 method（JSON-RPC 2.0 的 method 字段）：
+# 本 demo 只实现 MCP 的 tools 能力，涉及三个主要 method（JSON-RPC 2.0 的 method 字段）：
 #   1. initialize  — 握手：客户端询问服务端能力（capabilities）
 #   2. tools/list  — 工具发现：拿到所有工具的 schema 列表
 #   3. tools/call  — 工具调用：按名字 + 参数执行，返回结果
@@ -167,8 +166,6 @@ def handle_request(payload: dict) -> dict:
 def _handle_initialize(params: dict) -> dict:
     """
     initialize：握手 + 协议版本协商 + 能力声明。
-
-    真实场景这里还会做鉴权（API Key / OAuth），演示版跳过。
     """
     return {
         "protocolVersion": PROTOCOL_VERSION,
@@ -271,7 +268,7 @@ def main():
     print("=" * 60)
     print("Demo3 MCP Server 已启动")
     print(f"监听:   http://{args.host}:{args.port}/mcp")
-    print(f"协议:   JSON-RPC 2.0 over HTTP")
+    print(f"协议:   JSON-RPC 2.0 over HTTP Transport")
     print(f"工具:   {', '.join(t['name'] for t in TOOLS)}")
     print("=" * 60)
     print("等待 Agent 调用...\n")
