@@ -9,6 +9,7 @@ __pycache__/
 **/agent_memory.md
 **/.demo6_hook_log
 **/test_dir/
+**/weather.txt
 
 # OS
 .DS_Store
