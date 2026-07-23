@@ -10,6 +10,8 @@ __pycache__/
 **/.demo6_hook_log
 **/test_dir/
 **/weather.txt
+demo4-plan/_trace_*.txt
+demo4-plan/transcript.txt
 
 # OS
 .DS_Store
