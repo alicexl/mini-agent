@@ -32,7 +32,6 @@ Demo4-plan - 规划轴的 Agent
 import os
 import re
 import subprocess
-from typing import Optional
 
 from anthropic import Anthropic
 
@@ -201,7 +200,26 @@ LOCAL_TOOLS = [
             "required": ["todos"],
         },
     },
-]
+        {
+            # === demo4 新增 ===
+            "name": "use_skill",
+            "description": (
+                "激活一个 skill 获取其详细工作流正文。"
+                "当用户任务匹配 system prompt 中列出的某个可用 skill 时，先调用此工具获取该 skill 的步骤，"
+                "然后严格按照返回的工作流执行。"
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "要激活的 skill 名称（见 system prompt 中的可用 Skills 列表）",
+                    }
+                },
+                "required": ["name"],
+            },
+        },
+    ]
 
 
 # ============================================================
@@ -331,13 +349,28 @@ def plan(todos: list) -> str:
     )
 
 
+# ---- use_skill（demo4 新增） ----
+# 定义放在 LOCAL_FUNCTIONS 之前，因为路由表引用它。
+# _SKILLS 在 main() 启动时赋值，运行时调用没问题。
+
+
+def use_skill(name: str) -> str:
+    """激活 skill 获取工作流正文（tool 负责"拿技能"）"""
+    skill = _SKILLS.get(name)
+    if not skill:
+        return f"[错误] 未知 skill: {name}。可用: {', '.join(_SKILLS.keys()) or '(无)'}"
+    print(f"\n[Skill] LLM 激活 skill: {name}")
+    return skill["body"]
+
+
 # 路由表：工具名 → 实际函数（调度核心）
 # 当大模型说「我要调用 execute_bash」时，Agent 通过这张表把名字映射到具体函数并执行。
 LOCAL_FUNCTIONS = {
+    "use_skill":    use_skill,
     "execute_bash": execute_bash,
     "read_file":    read_file,
     "write_file":   write_file,
-    "plan":   plan,
+    "plan":         plan,
 }
 
 
@@ -352,14 +385,17 @@ LOCAL_FUNCTIONS = {
 #   ---
 #   # 工作流正文（LLM 收到匹配任务时按此执行）
 #
-# 两个关键时机：
-#   · 启动时：load_skills() 扫目录 + 解析 frontmatter → 内存里维护 {name: skill} 字典
-#   · 每轮用户输入：match_skill() 关键词扫描 → 命中则把 body 注入本次 system prompt
+# 三层协作（渐加载分离）：
+#   · system prompt — "我有哪些技能"（元信息清单：name + description + triggers）
+#   · use_skill 工具 — "拿技能"（LLM 主动调用获取 body）
+#   · skill 文件 — "技能具体怎么做"（tool_result 返回工作流正文）
 #
-# Skill 的本质：**把"LLM 每次重新想的常见任务步骤"固化为模板，相似任务直接套用**。
-# 对应 Claude Code 的 Skill 工具——description 匹配后把 SKILL.md 内容注入 prompt。
+# 对应 Claude Code 的 Skill 工具——system prompt 列可用 skill，LLM 自主调用获取 body。
 
 SKILLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
+
+# 模块级 skills 字典——main() 启动时赋值，use_skill 工具从中读取 body
+_SKILLS: dict = {}
 
 # YAML frontmatter 正则——非贪婪匹配首尾 ---
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)", re.DOTALL)
@@ -433,39 +469,27 @@ def load_skills() -> dict:
 def build_skill_metadata_section(skills: dict) -> str:
     """
     生成 system prompt 里的「## 可用 Skills」段。
-    只列 name + description（不注入 body），让 LLM 知道有哪些 skill 可激活。
+    system prompt 放"我有哪些技能"——LLM 据此决定是否调用 use_skill 获取 body。
     """
     if not skills:
         return ""
-    lines = ["\n## 可用 Skills（用户输入命中 trigger 时会自动激活对应 skill）\n"]
+    lines = ["\n## 可用 Skills\n"]
     for name, info in skills.items():
         lines.append(f"- **{name}**: {info['description']}")
         if info["triggers"]:
             lines.append(f"  - 触发词: {', '.join(info['triggers'])}")
+    lines.append("\n当用户任务匹配某个 skill 时，先调用 `use_skill` 获取该 skill 的详细工作流，然后严格按要求执行。")
     return "\n".join(lines) + "\n"
-
-
-def match_skill(user_input: str, skills: dict) -> Optional[str]:
-    """
-    扫描用户输入，命中某 skill 的任一 trigger 关键词则返回该 skill name。
-    多个 skill 同时命中时返回第一个（按 load_skills 的 sorted 顺序）。
-    都不命中返回 None。
-    """
-    text = user_input.lower()
-    for name, info in skills.items():
-        for trigger in info["triggers"]:
-            if trigger.lower() in text:
-                return name
-    return None
 
 
 # ============================================================
 # Part 5: Agent 主循环（ReAct + Skill body 注入）
 # ============================================================
 # 与 demo1 的核心区别：
-#   - 工具列表从 3 个扩到 4 个（新增 plan）
-#   - system prompt 三层叠加：基础说明 + 可用 Skills 元信息 + 当前激活 skill 的 body
-#   - 每次 user 输入时重新 match_skill 决定第三段——不同输入激活不同 skill
+#   - 工具列表从 3 个扩到 5 个（新增 plan + use_skill），走 API tools 参数
+#   - system prompt 两层叠加：基础说明 + 可用 Skills 元信息
+#   - LLM 自主调用 use_skill 获取 skill body（body 走 tool_result 进 messages）
+#   - 工具（tools 参数）与 skill（system prompt 元信息 + use_skill 工具）渐加载分离
 
 MAX_ITERATIONS = 30
 
@@ -501,60 +525,35 @@ def _print_messages(messages: list) -> None:
     print()
 
 
-def build_system_prompt(skills: dict, activated_skill: Optional[str]) -> str:
+def build_system_prompt(skills: dict) -> str:
     """
-    构造 system prompt（三层叠加）：
-        1. 基础说明（角色 + 工具清单 + plan 使用指引）
-        2. 可用 Skills 元信息（启动时注入一次，每次都带）
-        3. 当前激活 skill 的 body（本次输入命中时注入；否则空段）
+    构造 system prompt（两层叠加）：
+        1. 基础说明（角色）
+        2. 可用 Skills 元信息（"我有哪些技能"）
+
+    工具清单走 API tools 参数；skill body 走 use_skill 工具（tool_result 进 messages）。
     """
     parts = [
         "你是一个有用的助手，可以通过工具与本地系统交互完成任务。",
-        "",
-        "可用工具：",
-        "1. execute_bash: 执行 shell 命令",
-        "2. read_file: 读取文件内容",
-        "3. write_file: 写入文件",
-        "4. plan: 更新待办清单（仅复杂多步任务才用，详见工具说明）",
-        "",
-        "**任务复杂度自判规则**：",
-        "- 简单任务（1-2 步、单一工具）→ 直接 ReAct，跳过 plan",
-        "- 复杂任务（3+ 步、多工具协作、有依赖）→ 先 plan 列步骤，再逐步执行并更新状态",
+        f"当前工作目录（相对路径基准）：{os.getcwd()}。用户提到的文件若在此目录下，直接用文件名，不要再额外加目录前缀。",
     ]
 
-    # 第二层：可用 Skills 元信息
+    # 可用 Skills 元信息
     skill_meta = build_skill_metadata_section(skills)
     if skill_meta:
         parts.append(skill_meta)
-
-    # 第三层：当前激活 skill 的 body
-    if activated_skill and activated_skill in skills:
-        body = skills[activated_skill]["body"]
-        parts.append(
-            f"\n## 当前激活的 Skill：{activated_skill}\n\n"
-            f"本次用户输入命中了 `{activated_skill}` skill 的触发词。"
-            f"**必须严格按照下面的工作流执行**：\n\n{body}\n"
-        )
 
     return "\n".join(parts)
 
 
 def run_agent(
     user_input: str,
-    skills: dict,
     verbose: bool = True,
 ) -> str:
     """
-    ReAct 主循环（同 demo1，工具集扩为 4 个 + system prompt 含 skill 注入）。
+    ReAct 主循环（同 demo1，工具集扩为 5 个 + system prompt 含 Skills 元信息）。
     """
-    # ---- 每轮 user 输入时重新决策激活哪个 skill ----
-    activated = match_skill(user_input, skills)
-    if activated:
-        print(f"[Skill] 用户输入命中 → 激活 skill: {activated}")
-    elif skills:
-        print(f"[Skill] 未命中任何 skill（可用: {', '.join(skills.keys())}）")
-
-    system_prompt = build_system_prompt(skills, activated)
+    system_prompt = build_system_prompt(_SKILLS)
     messages = [{"role": "user", "content": user_input}]
 
     for loop_idx in range(1, MAX_ITERATIONS + 1):
@@ -631,10 +630,11 @@ def main():
     print("=" * 60)
 
     # ---- 启动时加载所有 skills ----
-    skills = load_skills()
-    if skills:
-        print(f"[Skills] 加载 {len(skills)} 个：")
-        for name, info in skills.items():
+    global _SKILLS
+    _SKILLS = load_skills()
+    if _SKILLS:
+        print(f"[Skills] 加载 {len(_SKILLS)} 个：")
+        for name, info in _SKILLS.items():
             print(f"  - {name}: {info['description'][:60]}")
             print(f"    触发词: {', '.join(info['triggers'])}")
     else:
@@ -642,7 +642,7 @@ def main():
 
     print(f"\n[Tools] 共 {len(LOCAL_TOOLS)} 个本地工具："
           f"{', '.join(t['name'] for t in LOCAL_TOOLS)}")
-    print("[Tools] 其中 `plan` 用于复杂多步任务的规划（LLM 自动决策何时用）")
+    print("[Tools] 其中 `plan` 用于复杂多步任务的规划，`use_skill` 用于获取 skill 工作流正文")
 
     print("\n命令:   /skills 查看已加载 skills / quit 退出")
     print("=" * 60)
@@ -661,22 +661,18 @@ def main():
             break
 
         if user_input.lower() in {"/skills", "/s"}:
-            if not skills:
+            if not _SKILLS:
                 print(f"\n[Skills] 无（目录 {SKILLS_DIR} 为空或不存在）")
             else:
-                print(f"\n--- 已加载 {len(skills)} 个 Skills ---")
-                for name, info in skills.items():
+                print(f"\n--- 已加载 {len(_SKILLS)} 个 Skills ---")
+                for name, info in _SKILLS.items():
                     print(f"  [{name}] {info['description']}")
                     print(f"    触发词: {', '.join(info['triggers'])}")
                     print(f"    来源:   {info['file']}")
             continue
 
         try:
-            final = run_agent(
-                user_input=user_input,
-                skills=skills,
-                verbose=True,
-            )
+            final = run_agent(user_input=user_input, verbose=True)
             print(f"\n助手: {final}")
         except Exception as e:
             print(f"\n[错误] {e}")
