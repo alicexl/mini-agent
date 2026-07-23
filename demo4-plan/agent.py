@@ -4,8 +4,8 @@
 Demo4-plan - 规划轴的 Agent
 
 在 demo1-react（base）基础上叠加「规划轴」：
-    + TodoWrite：把"列步骤"显式化（自动决策版）
-        · LLM 自主判断任务复杂度——简单任务直接 ReAct，复杂任务先 todo_write 列步骤
+    + plan：把"列步骤"显式化（自动决策版）
+        · LLM 自主判断任务复杂度——简单任务直接 ReAct，复杂任务先 plan 列步骤
         · 对应 Claude Code 的 TodoWrite 工具
     + Skill：预消化的工作流
         · skills/*.md 用 YAML frontmatter 声明 triggers 关键词
@@ -15,12 +15,12 @@ Demo4-plan - 规划轴的 Agent
 公式：demo4 = base × 规划
 
 「规划」的两类增量：
-    (A) 单次任务的内部规划：TodoWrite 让 LLM 把多步拆解显式化、可观测、可追踪
+    (A) 单次任务的内部规划：plan 让 LLM 把多步拆解显式化、可观测、可追踪
     (B) 跨任务的复用规划：Skill 把"常见任务的最佳实践步骤"预先固化，相似任务直接套用
 
 单文件按 5 个 Part 组织：
     Part 1: LLM 客户端初始化（同 demo1）
-    Part 2: 本地工具定义（demo1 三件套 + 新增 todo_write）
+    Part 2: 本地工具定义（demo1 三件套 + 新增 plan）
     Part 3: 本地工具实现 + 路由表
     Part 4: Skill 加载器（扫描 skills/ → frontmatter 解析 → 关键词匹配）
     Part 5: Agent 主循环（ReAct + Skill body 注入 system prompt）
@@ -104,23 +104,23 @@ def init_client() -> None:
 
 
 # ============================================================
-# Part 2: 本地工具定义（demo1 三件套 + 新增 todo_write）
+# Part 2: 本地工具定义（demo1 三件套 + 新增 plan）
 # ============================================================
 # 每次请求随 tools 参数一起发给大模型，相当于一份「工具说明书」。
 # 大模型拿到说明书后就知道自己有哪些本地能力，但真正的执行发生在本地代码里。
 #
 # demo1 的 3 件套（execute_bash / read_file / write_file）保留不变。
-# demo4 在此基础上**新增 1 个本地工具 todo_write** —— 把"规划"显式化。
+# demo4 在此基础上**新增 1 个本地工具 plan** —— 把"规划"显式化。
 #
-# 为什么需要 todo_write？
+# 为什么需要 plan？
 #   ReAct 循环是「走一步看一步」——LLM 每轮只决策下一步。
 #   对 3 步以上的复杂任务，LLM 容易在中途跑偏、忘了目标、重复尝试。
-#   todo_write 让 LLM 先把整个任务的步骤列出来（规划阶段），
+#   plan 让 LLM 先把整个任务的步骤列出来（规划阶段），
 #   再逐步执行（执行阶段），每完成一步更新状态——这是 Claude Code 的核心机制之一。
 #
-# 何时用 todo_write？由 LLM 自动判断：
+# 何时用 plan？由 LLM 自动判断：
 #   · 简单任务（1-2 步、单一工具）→ 不用，直接 ReAct
-#   · 复杂任务（3+ 步、多工具协作、有依赖）→ 先 todo_write 列步骤再执行
+#   · 复杂任务（3+ 步、多工具协作、有依赖）→ 先 plan 列步骤再执行
 
 LOCAL_TOOLS = [
     {
@@ -165,13 +165,13 @@ LOCAL_TOOLS = [
     },
     {
         # === demo4 新增 ===
-        "name": "todo_write",
+        "name": "plan",
         "description": (
-            "更新当前任务的待办步骤清单（TodoWrite 风格）。"
+            "更新当前任务的待办步骤清单（规划用）。"
             "**使用时机**：只在**复杂的多步任务**（3 步以上、多工具协作、步骤间有依赖）开头规划阶段调用，"
             "把整个任务拆成显式 step 列表；后续每完成一步就再调一次本工具更新对应 step 的状态。\n\n"
             "**不要滥用**：简单的一两步任务（如「统计 .py 文件数」「读一下某文件」）"
-            "请直接用 execute_bash / read_file 完成，**不要**为了用而用 todo_write。\n\n"
+            "请直接用 execute_bash / read_file 完成，**不要**为了用而用 plan。\n\n"
             "**状态规则**：同一时刻最多只能有 1 个 step 处于 in_progress；"
             "开始下一步前，把上一步从 in_progress 改为 completed，把下一步从 pending 改为 in_progress。"
         ),
@@ -219,7 +219,8 @@ def execute_bash(command: str) -> str:
             command,
             shell=True,            # 让命令拥有更强能力
             capture_output=True,
-            text=True,
+            encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8（CLAUDE.md 工程规范）
+            errors="replace",
             timeout=60,            # 防止死循环 / 长时间阻塞
         )
         output = []
@@ -277,13 +278,13 @@ _STATUS_MARK = {
 }
 
 
-def todo_write(todos: list) -> str:
+def plan(todos: list) -> str:
     """
     更新待办清单（demo4 新增）。
 
     与其它工具的核心区别：
         - execute_bash / read_file / write_file 都是「执行一步」
-        - todo_write 是「规划整段」——把多步任务一次性铺开，让 LLM 自己和用户都能看到全局
+        - plan 是「规划整段」——把多步任务一次性铺开，让 LLM 自己和用户都能看到全局
 
     落盘到 todos.md 只是给人看的副产物；真正的作用是把"规划阶段"在 ReAct 轨迹里显式化。
     """
@@ -336,7 +337,7 @@ LOCAL_FUNCTIONS = {
     "execute_bash": execute_bash,
     "read_file":    read_file,
     "write_file":   write_file,
-    "todo_write":   todo_write,
+    "plan":   plan,
 }
 
 
@@ -462,7 +463,7 @@ def match_skill(user_input: str, skills: dict) -> Optional[str]:
 # Part 5: Agent 主循环（ReAct + Skill body 注入）
 # ============================================================
 # 与 demo1 的核心区别：
-#   - 工具列表从 3 个扩到 4 个（新增 todo_write）
+#   - 工具列表从 3 个扩到 4 个（新增 plan）
 #   - system prompt 三层叠加：基础说明 + 可用 Skills 元信息 + 当前激活 skill 的 body
 #   - 每次 user 输入时重新 match_skill 决定第三段——不同输入激活不同 skill
 
@@ -503,7 +504,7 @@ def _print_messages(messages: list) -> None:
 def build_system_prompt(skills: dict, activated_skill: Optional[str]) -> str:
     """
     构造 system prompt（三层叠加）：
-        1. 基础说明（角色 + 工具清单 + todo_write 使用指引）
+        1. 基础说明（角色 + 工具清单 + plan 使用指引）
         2. 可用 Skills 元信息（启动时注入一次，每次都带）
         3. 当前激活 skill 的 body（本次输入命中时注入；否则空段）
     """
@@ -514,11 +515,11 @@ def build_system_prompt(skills: dict, activated_skill: Optional[str]) -> str:
         "1. execute_bash: 执行 shell 命令",
         "2. read_file: 读取文件内容",
         "3. write_file: 写入文件",
-        "4. todo_write: 更新待办清单（仅复杂多步任务才用，详见工具说明）",
+        "4. plan: 更新待办清单（仅复杂多步任务才用，详见工具说明）",
         "",
         "**任务复杂度自判规则**：",
-        "- 简单任务（1-2 步、单一工具）→ 直接 ReAct，跳过 todo_write",
-        "- 复杂任务（3+ 步、多工具协作、有依赖）→ 先 todo_write 列步骤，再逐步执行并更新状态",
+        "- 简单任务（1-2 步、单一工具）→ 直接 ReAct，跳过 plan",
+        "- 复杂任务（3+ 步、多工具协作、有依赖）→ 先 plan 列步骤，再逐步执行并更新状态",
     ]
 
     # 第二层：可用 Skills 元信息
@@ -594,8 +595,8 @@ def run_agent(
             if fn is None:
                 result = f"[错误] 未知工具: {name}"
             else:
-                if verbose and name != "todo_write":
-                    # todo_write 内部已 pretty-print，这里不重复打印
+                if verbose and name != "plan":
+                    # plan 内部已 pretty-print，这里不重复打印
                     print(f"\n[执行工具] {name}({_preview(args, 80)})")
                 try:
                     result = str(fn(**args))
@@ -641,7 +642,7 @@ def main():
 
     print(f"\n[Tools] 共 {len(LOCAL_TOOLS)} 个本地工具："
           f"{', '.join(t['name'] for t in LOCAL_TOOLS)}")
-    print("[Tools] 其中 `todo_write` 用于复杂多步任务的规划（LLM 自动决策何时用）")
+    print("[Tools] 其中 `plan` 用于复杂多步任务的规划（LLM 自动决策何时用）")
 
     print("\n命令:   /skills 查看已加载 skills / quit 退出")
     print("=" * 60)
