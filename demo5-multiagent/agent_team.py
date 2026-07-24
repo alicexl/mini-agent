@@ -171,7 +171,8 @@ def execute_bash(command: str) -> str:
             command,
             shell=True,            # 让命令拥有更强能力
             capture_output=True,
-            text=True,
+            encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
+            errors="replace",
             timeout=60,            # 防止死循环 / 长时间阻塞
         )
         output = []
@@ -195,7 +196,7 @@ def read_file(path: str) -> str:
             return f"[错误] 文件不存在: {path}"
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
-        max_length = 10000
+        max_length = 20000
         if len(content) > max_length:
             content = content[:max_length] + f"\n\n... [内容已截断，共 {len(content)} 字符]"
         return content

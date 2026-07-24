@@ -166,7 +166,8 @@ def execute_bash(command: str) -> str:
             command,
             shell=True,            # 让命令拥有更强能力
             capture_output=True,
-            text=True,
+            encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
+            errors="replace",
             timeout=60,            # 防止死循环 / 长时间阻塞
         )
         output = []
@@ -190,7 +191,7 @@ def read_file(path: str) -> str:
             return f"[错误] 文件不存在: {path}"
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
-        max_length = 10000
+        max_length = 20000
         if len(content) > max_length:
             content = content[:max_length] + f"\n\n... [内容已截断，共 {len(content)} 字符]"
         return content
@@ -582,13 +583,18 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                fn = AVAILABLE_FUNCTIONS.get(block.name)
+                name = block.name
+                args = block.input or {}
+                fn = AVAILABLE_FUNCTIONS.get(name)
                 if fn is None:
-                    result = f"[错误] 未知工具: {block.name}"
+                    result = f"[错误] 未知工具: {name}"
                 else:
                     if verbose:
-                        print(f"[执行工具] {block.name}({block.input})")
-                    result = fn(**block.input)
+                        print(f"[执行工具] {name}({args})")
+                    try:
+                        result = str(fn(**args))
+                    except Exception as e:
+                        result = f"[错误] 工具 {name} 执行失败: {e}"
 
                 if verbose:
                     print(f"[工具结果] {_preview(result, 200)}")

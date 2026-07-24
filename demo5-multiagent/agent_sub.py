@@ -197,7 +197,8 @@ def execute_bash(command: str) -> str:
             command,
             shell=True,            # 让命令拥有更强能力
             capture_output=True,
-            text=True,
+            encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
+            errors="replace",
             timeout=60,            # 防止死循环 / 长时间阻塞
         )
         output = []
@@ -221,7 +222,7 @@ def read_file(path: str) -> str:
             return f"[错误] 文件不存在: {path}"
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
-        max_length = 10000
+        max_length = 20000
         if len(content) > max_length:
             content = content[:max_length] + f"\n\n... [内容已截断，共 {len(content)} 字符]"
         return content
@@ -287,10 +288,28 @@ def _preview(text, limit: int = 60) -> str:
 
 
 def _print_messages(messages: list) -> None:
-    """调试打印——只是给人看的预览"""
+    """调试打印——只是给人看的预览。"""
     print(f"[messages] 当前 {len(messages)} 条消息")
     for i, msg in enumerate(messages):
-        print(f"  [{i}] {msg['role']:<9}: {_preview(msg['content'])}")
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "text":
+                        parts.append(block.get("text", ""))
+                    elif block.get("type") == "tool_use":
+                        parts.append(f"[调用工具 {block.get('name')}]")
+                    elif block.get("type") == "tool_result":
+                        parts.append(str(block.get("content", ""))[:100])
+                else:
+                    t = getattr(block, "type", None)
+                    if t == "text":
+                        parts.append(getattr(block, "text", ""))
+                    elif t == "tool_use":
+                        parts.append(f"[调用工具 {getattr(block, 'name', '')}]")
+            content = "\n".join(parts)
+        print(f"  [{i}] {msg.get('role', '?'):<9}: {_preview(content)}")
     print()
 
 
