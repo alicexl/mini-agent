@@ -4,25 +4,13 @@
 Demo5 - 多 Agent 轴（一）：Subagent 一次性外包
 
 公式：demo5 = base × 多 Agent
-    本文件演示第一条机制 —— Subagent（70% 权重）
+    本文件演示第一条机制 —— Subagent
 
 核心问题：
     单 Agent 的 messages 越叠越长，遇到相互独立的子任务时上下文污染严重。
     Subagent = 把独立子任务"分包出去"：派一个独立 Agent 干完返回结果即销毁。
 
-关键设计：
-    · 独立 context：Subagent 有自己的 messages，与主 Agent 完全隔离
-    · 无状态：不注入 Rules / 不注入记忆
-    · 结束即销毁：循环结束返回结果摘要，messages/prompt 全部丢弃
-    · 工具集去 subagent：子循环看不到 subagent 工具，防无限递归
-
-对应 Claude Code 的 Task tool / Cursor 的 agent / Devin 的子任务派发。
-
-单文件按 4 部分组织：
-    Part 1: LLM 客户端初始化（沿用 demo1-react）
-    Part 2: 工具定义（demo1 三件套 + subagent）
-    Part 3: 工具实现 + 路由表（subagent 不在路由表，主循环单独拦截）
-    Part 4: 主循环 + Subagent 循环（共用 _react_loop）
+单文件 4 个 Part：客户端 / 工具定义 / 工具实现 / 主循环 + Subagent 循环
 
 启动：
     python agent_sub.py
@@ -101,13 +89,9 @@ def init_client() -> None:
 
 
 # ============================================================
-# Part 2: 工具定义（demo1 三件套 + subagent）
+# Part 2: 工具定义（demo1 四件套 + subagent）
 # ============================================================
-# 每次请求随 tools 参数一起发给大模型，相当于一份「工具说明书」。
-# 大模型拿到说明书后就知道自己有哪些本地能力，但真正的执行发生在本地代码里。
-#
-# 三个本地小工具（execute_bash / read_file / write_file）照搬 demo1-react。
-# 新增 `subagent`——主 Agent 通过调用它派生一个独立 Agent 循环。
+# demo1 的工具保留不变，demo5 新增 subagent。
 
 ALL_TOOLS = [
     {
@@ -151,15 +135,26 @@ ALL_TOOLS = [
         },
     },
     {
+        "name": "edit",
+        "description": "精确替换文件中的一段文本。比 write_file 整文件覆写更精细。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":        {"type": "string",  "description": "要编辑的文件路径"},
+                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配）"},
+                "new":         {"type": "string",  "description": "替换为的新文本"},
+                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false）"},
+            },
+            "required": ["path", "old", "new"],
+        },
+    },
+    {
         "name": "subagent",
         "description": (
-            "委派一个独立的 Subagent 来完成子任务。Subagent 拥有独立的角色（system_prompt）"
-            "和独立的上下文（messages），执行完返回结果摘要后即销亡。\n\n"
-            "**使用时机**：**相互独立的子任务**才用——每个子任务派一个 Subagent。"
-            "当用户输入包含「1) 2) 3)」这种编号列表、且列出 2 个及以上相互独立的子任务时，"
-            "**必须**为每个子任务**调用一次 subagent 工具**，由对应 Subagent 完成。\n\n"
-            "**不适合的场景**：后一步要用前一步结果的链式任务（例如「先读文件，再把内容排序后写入新文件」），"
-            "这种应让主 Agent 自己顺序完成——Subagent 干完就销毁，无法把结果传给下一个 Subagent。"
+            "委派一个独立的 Subagent 完成子任务。Subagent 有独立的 context（messages），"
+            "执行完返回结果摘要后即销毁。主 Agent 不关心子任务怎么做，只关心结果。\n\n"
+            "**使用时机**：相互独立的子任务——每个子任务派一个 Subagent。"
+            "链式任务（后一步依赖前一步结果）不要用，Subagent 之间无法传递结果。"
         ),
         "input_schema": {
             "type": "object",
@@ -172,23 +167,11 @@ ALL_TOOLS = [
     },
 ]
 
-SYSTEM_PROMPT = """你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。
-
-遇到相互独立的子任务时（如「1) 统计文件数；2) 读某文件首行」这种编号列表），
-请为每个子任务派一个 Subagent——它们各自独立干完汇报。
-有链式依赖的任务（先 A 再 B）请自己顺序做。"""
-
 
 # ============================================================
 # Part 3: 工具实现 + 路由表
 # ============================================================
-# 每个工具是一个普通 Python 函数：
-#   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
-#   - 设置超时，防止死循环或长时间阻塞
-#   - shell=True 让命令拥有更强能力（风险换能力）
-#
-# 注意：subagent 不在 LOCAL_FUNCTIONS——它需要"启动一个独立 Agent 循环"的特殊逻辑，
-# 在 _react_loop 里单独拦截。
+# subagent 和其它工具一样在路由表中，唯一特殊逻辑是内部启动子循环时过滤自身防递归。
 
 def execute_bash(command: str) -> str:
     """执行 shell 命令"""
@@ -245,38 +228,77 @@ def write_file(path: str, content: str) -> str:
         return f"[错误] 写入文件失败: {e}"
 
 
-# 路由表：工具名 → 实际函数（调度核心）
-# 当大模型说「我要调用 execute_bash」时，Agent 通过这张表把名字映射到具体函数并执行。
-# 注：subagent 不在此表——它在 _react_loop 里单独拦截（启动独立 Agent 循环）。
-LOCAL_FUNCTIONS = {
-    "execute_bash": execute_bash,
-    "read_file":    read_file,
-    "write_file":   write_file,
-}
+def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
+    """精确替换文件中的文本"""
+    try:
+        if not os.path.exists(path):
+            return f"[错误] 文件不存在: {path}"
+        if not old:
+            return "[错误] old 不能为空"
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        occurrences = content.count(old)
+        if occurrences == 0:
+            return f"[错误] 未找到匹配文本，请用 read_file 确认精确内容"
+        new_content = content.replace(old, new) if replace_all else content.replace(old, new, 1)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        which = f"全部 {occurrences} 处" if replace_all else f"第 1 处（共 {occurrences} 处）"
+        return f"[成功] {path} 替换 {which}"
+    except Exception as e:
+        return f"[错误] 编辑文件失败: {e}"
 
 
-def build_subagent_system_prompt(role: str) -> str:
+def subagent(role: str, task: str) -> str:
     """
-    Subagent 的 system prompt = 角色化指令 + "只做被吩咐的事"。
+    委派独立 Subagent 完成子任务（demo5 新增）。
 
-    与主 Agent 相比：
-      · 不注入 Rules（demo5 不做规则轴）
-      · 不注入记忆（避免无关历史任务干扰，保持专注）
+    为 Subagent 启动独立 ReAct 循环——独立 messages、独立 system prompt、
+    工具集去掉 subagent 自身防递归。用完即销毁。
     """
-    return (
+    tools = [t for t in ALL_TOOLS if t["name"] != "subagent"]
+    indent = "    "  # 缩进打印，区分主/子 Agent 轨迹
+
+    if True:  # verbose 恒为 True，教学演示需要
+        print(f"{indent}{'─' * 50}")
+        print(f"{indent}[Subagent · depth=1] role={role!r}")
+        print(f"{indent}[Subagent · depth=1] task={_preview(task, 100)}")
+        print(f"{indent}{'─' * 50}")
+
+    sub_messages = [{"role": "user", "content": task}]
+    sub_system_prompt = (
         f"你是一个被委派来的 Subagent。你的角色是：**{role}**。\n"
         f"请专注于交给你完成的任务，做完后用一两句话汇报结果。"
     )
+
+    final = _react_loop(
+        messages=sub_messages,
+        tools=tools,
+        local_fns=AVAILABLE_FUNCTIONS,
+        system_prompt=sub_system_prompt,
+        depth=1,
+        verbose=True,
+        indent=indent,
+    )
+
+    print(f"{indent}[Subagent · depth=1] 返回主 Agent，messages 即刻销毁")
+    return f"[Subagent · {role}] 任务：{task}\n结果：{final}"
+
+
+# 路由表：工具名 → 实际函数（调度核心）
+AVAILABLE_FUNCTIONS = {
+    "execute_bash": execute_bash,
+    "read_file":    read_file,
+    "write_file":   write_file,
+    "edit":         edit,
+    "subagent":     subagent,
+}
 
 
 # ============================================================
 # Part 4: 主循环 + Subagent 循环（共用 _react_loop）
 # ============================================================
-# 把 demo1 的 run_agent 抽象成一个通用 ReAct 循环——主 Agent 和 Subagent 都跑它，
-# 差别只在：
-#   · messages 是否独立：主 Agent 用一份；每次调 subagent 新建一份
-#   · system_prompt 是否带角色：主 Agent 用全局 SYSTEM_PROMPT；Subagent 只拼角色
-#   · 工具集是否含 subagent：主 Agent 含；Subagent **去掉 subagent 防递归**
+# 主 Agent 和 Subagent 共用 _react_loop，差别只在 messages 和 system_prompt。
 
 STEP_MAX_ITERATIONS = 10   # 单个 ReAct 循环的最大轮数
 
@@ -318,7 +340,6 @@ def _react_loop(
     tools: list,
     local_fns: dict,
     system_prompt: str,
-    tools_for_subagent: list,
     depth: int,
     verbose: bool,
     indent: str = "",
@@ -327,22 +348,13 @@ def _react_loop(
     通用 ReAct 循环——主 Agent 和 Subagent 共用。
 
     Args:
-        messages:                该循环专属的 messages（主 Agent / Subagent 各自独立）
-        tools:                   本循环 LLM 能看到的工具列表
-        local_fns:               本循环可调用的本地函数字典
-        system_prompt:           本循环的 system prompt（主 Agent / Subagent 不同）
-        tools_for_subagent:      若 LLM 调 subagent，传给子循环的工具集（已去掉 subagent）
-        depth:                   当前的递归深度（主 Agent = 0，Subagent = 1+）
-        verbose:                 是否打印轨迹
-        indent:                  打印缩进，让 subagent 轨迹可视化区分
-
-    每个 ReAct 迭代：
-        1. 发请求拿响应
-        2. 若 stop_reason != tool_use → 返回文本（这一层循环结束）
-        3. 遍历响应里的 tool_use 块：
-           · subagent → 转手 _run_subagent 起一个独立子循环
-           · 其它 → 走 local_fns 函数调用
-        4. 把 tool_result 灌回 messages，进入下一轮
+        messages:      该循环专属的 messages（主 Agent / Subagent 各自独立）
+        tools:         本循环 LLM 能看到的工具列表
+        local_fns:     本循环可调用的本地函数字典
+        system_prompt: 本循环的 system prompt（主 Agent / Subagent 不同）
+        depth:         当前的递归深度（主 Agent = 0，Subagent = 1+）
+        verbose:       是否打印轨迹
+        indent:        打印缩进，让 subagent 轨迹可视化区分
     """
     response = None
     for i in range(1, STEP_MAX_ITERATIONS + 1):
@@ -370,7 +382,7 @@ def _react_loop(
 
         messages.append({"role": "assistant", "content": response.content})
 
-        # 遍历 tool_use 块：subagent 起独立子循环，其它走 local_fns
+        # 遍历 tool_use 块，走路由表分发
         tool_results = []
         for block in response.content:
             if block.type != "tool_use":
@@ -380,19 +392,7 @@ def _react_loop(
             if verbose:
                 print(f"{indent}  [LLM] {name}({_preview(args, 80)})")
 
-            if name == "subagent":
-                if verbose:
-                    print(f"{indent}  [工具 · Subagent] role={args.get('role')!r} "
-                          f"task={_preview(args.get('task', ''), 80)}")
-                result = _run_subagent(
-                    role=args.get("role", "通用助手"),
-                    task=args.get("task", ""),
-                    tools=tools_for_subagent,
-                    local_fns=local_fns,
-                    depth=depth + 1,
-                    verbose=verbose,
-                )
-            elif name in local_fns:
+            if name in local_fns:
                 if verbose:
                     print(f"{indent}  [工具 · 本地] {name}")
                 try:
@@ -416,62 +416,13 @@ def _react_loop(
     return f"[ReAct 循环未在 {STEP_MAX_ITERATIONS} 轮内完成]"
 
 
-def _run_subagent(
-    role: str,
-    task: str,
-    tools: list,
-    local_fns: dict,
-    depth: int,
-    verbose: bool,
-) -> str:
-    """
-    启动一个独立的 Subagent ReAct 循环。
-
-    关键设计：
-        · 独立的 messages：从 [{"role":"user","content":task}] 开始，
-          与主 Agent 的 messages 完全隔离——拿不到主 Agent 的历史对话，
-          也不会污染主 Agent 的上下文
-        · 独立 system_prompt：基于 role 拼一个角色化系统提示，不注入 Rules / 记忆
-        · 工具集去掉 subagent：阻止 Subagent 派生下一层 Subagent（防无限递归）
-        · 一次性生命周期：循环结束 → 返回结果摘要 → messages / prompt 全部丢弃
-    """
-    indent = "    " * depth  # 缩进打印，让 subagent 轨迹嵌套可视化
-
-    if verbose:
-        print(f"{indent}{'─' * 50}")
-        print(f"{indent}[Subagent · depth={depth}] role={role!r}")
-        print(f"{indent}[Subagent · depth={depth}] task={_preview(task, 100)}")
-        print(f"{indent}{'─' * 50}")
-
-    sub_messages = [{"role": "user", "content": task}]
-    sub_system_prompt = build_subagent_system_prompt(role)
-
-    final = _react_loop(
-        messages=sub_messages,
-        tools=tools,
-        local_fns=local_fns,
-        system_prompt=sub_system_prompt,
-        tools_for_subagent=tools,   # 已经去掉 subagent，再传下去也无妨
-        depth=depth,
-        verbose=verbose,
-        indent=indent,
-    )
-
-    if verbose:
-        print(f"{indent}[Subagent · depth={depth}] 返回主 Agent，messages 即刻销毁")
-
-    return f"[Subagent · {role}] 任务：{task}\n结果：{final}"
-
-
 def run_agent(user_input: str, verbose: bool = True) -> str:
     """
     主 Agent 循环。
 
-    与 demo1 的差异：
-        - LLM 看到工具列表里有 subagent，遇到相互独立的子任务时会主动委派
-        - tools_for_subagent 在所有工具里去掉 subagent——一旦 LLM 调 subagent，
-          就用这份工具集启动子循环（子循环不会再调 subagent，堵死递归）
+    与 demo1 的差异：工具列表多了 subagent。
     """
+    system_prompt = "你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"
     messages = [{"role": "user", "content": user_input}]
 
     if verbose:
@@ -480,15 +431,11 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
         print(f"{'=' * 60}")
         _print_messages(messages)
 
-    # 给 subagent 准备的工具集：去掉 subagent 自身
-    tools_for_subagent = [t for t in ALL_TOOLS if t.get("name") != "subagent"]
-
     return _react_loop(
         messages=messages,
         tools=ALL_TOOLS,
-        local_fns=LOCAL_FUNCTIONS,
-        system_prompt=SYSTEM_PROMPT,
-        tools_for_subagent=tools_for_subagent,
+        local_fns=AVAILABLE_FUNCTIONS,
+        system_prompt=system_prompt,
         depth=0,
         verbose=verbose,
     )
@@ -509,7 +456,7 @@ def main():
     print("        其中 `subagent` 可派生独立 Agent（已自动禁止递归）")
     print("=" * 60)
     print("输入 quit / exit 退出")
-    print("建议任务：1) 统计 demo5-multiagent 下 .py 文件数；2) 读 agent_sub.py 第 1 行注释")
+
 
     while True:
         try:

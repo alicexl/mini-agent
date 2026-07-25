@@ -1,37 +1,26 @@
-# Demo3 — 工具扩展轴
+# Demo3 — MCP 工具协议
 
-> 在 demo1-react（base）上独立叠加「工具轴」：新增本地 `edit` 工具 + 接入 MCP 外部工具协议。
+> 在 demo1-react（base）上独立叠加 MCP 跨进程工具协议。
 
 ## 文档导航
 
-- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（7 章）
-  1. 结论：demo3 vs demo1
-  2. 本地工具扩展：edit（string replacement）
-  3. MCP 协议：从函数调用到 RPC
-  4. MCP Server 实现
-  5. Agent 端：MCP Client + 工具合并
-  6. 真实案例：edit 精细修改 + MCP 远程调用
-  7. 总结与下一节预告
+- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（6 章）
+  1. demo3 干了什么
+  2. MCP 协议：从函数调用到 RPC
+  3. MCP Server 实现
+  4. Agent 端：MCP Client + 工具合并
+  5. 真实案例
+  6. 总结
 
 ## 关键文件
 
 | 文件 | 说明 |
 |---|---|
-| `agent.py` | Agent 主程序（Part 1-5：客户端 / 本地工具（含 edit）/ 工具实现 / MCP Client / 主循环） |
+| `agent.py` | Agent 主程序（Part 1-5：客户端 / 工具定义 / 工具实现 / MCP Client / 主循环） |
 | `mcp_server.py` | MCP Server（HTTP + JSON-RPC 2.0，暴露 add / multiply / weather 三个工具） |
 | `讲稿.md` | 教学讲稿 |
 
 ## 设计要点
-
-### 本地工具扩展：edit
-
-- demo1 的 3 件套（execute_bash / read_file / write_file）保留不变
-- demo3 新增 `edit`——精确替换文件中的一段文本（string replacement）
-- 与 write_file 的核心区别：
-  - `write_file`：发整文件内容 → 重写整文件（适合创建新文件）
-  - `edit`：只发 old + new 两段 → 在原文件上做替换（适合改一行 / 改一个值）
-- 默认只替换第一处；`replace_all=true` 替换全部匹配
-- 设计动机与 Claude Code 的 Edit 工具一致——对大文件做小改动时节省 token
 
 ### MCP（外部工具协议）
 

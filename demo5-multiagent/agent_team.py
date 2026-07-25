@@ -4,35 +4,21 @@
 Demo5 - 多 Agent 轴（二）：Team 持久项目组
 
 公式：demo5 = base × 多 Agent
-    本文件演示第二条机制 —— Team（30% 权重）
 
-Subagent 的痛点：
-    · 干完结果就丢，不能累积记忆
-    · 不能互相通信（A 的结果传不到 B）
-    · 不能质检打回（结果对不对只能主 Agent 看一眼）
+在 demo1-react（base）基础上叠加 Team 模式：
+    + Agent —— 持久对象（name/role/messages/inbox）
+    + Team —— 协调器（recruit/send/broadcast/dismiss）
+    + plan_team —— LLM 自主判断是否需要团队，需要则设计角色任务 + 招募 + 执行
 
-Team 模式的升级：
-    · Agent 从"一次性函数"升级为"持久化对象"——有 name / role / messages / inbox
-    · Agent 的 messages 跨多次 chat 累积（"我之前做了什么、别人给我发了什么"）
-    · inbox 让 Agent 之间能互相塞消息
-    · Researcher→Writer→Reviewer 流水线 + 状态机 + 质检总闸门
-
-对应 AutoGen / CrewAI 范式。
-
-单文件按 6 部分组织：
-    Part 1: LLM 客户端初始化（沿用 demo1-react）
-    Part 2: 工具定义（demo1 三件套，无 subagent）
-    Part 3: 工具实现 + 路由表
-    Part 4: Agent 类（核心新增——inbox + 长期 messages + chat）
-    Part 5: Team 类 + 状态机（核心新增——Researcher→Writer→Reviewer 流水线）
-    Part 6: 交互式入口
+单文件 5 个 Part：客户端 / 工具定义 / 工具实现 + Team 基础设施 / 主循环 / 入口
 
 启动：
     python agent_team.py
 """
 
 import os
-import json
+import random
+import re
 import subprocess
 
 from anthropic import Anthropic
@@ -41,89 +27,61 @@ from anthropic import Anthropic
 # ============================================================
 # Part 1: 配置 + LLM 客户端初始化
 # ============================================================
-# 网关、模型、超时均写死，用户只需配置 API Key（两种方式）：
-#   1. 直接修改下面的 API_KEY
-#   2. 都没设 → 运行时交互式提示输入（不持久化，每次都要重输）
-# 默认走智谱 BigModel 的 Anthropic 兼容网关 + glm-5.2 模型。
 
-# ↓↓↓ 只需改这一行 ↓↓↓
 API_KEY = ""
-
-# 默认配置（一般无需修改）
-BASE_URL       = "https://open.bigmodel.cn/api/anthropic"   # 智谱 BigModel Anthropic 兼容网关
-MODEL          = "glm-5.2"                                  # 模型名
-API_TIMEOUT_MS = 3000000                                    # 单次请求超时（毫秒），3000000ms = 50 分钟
+BASE_URL       = "https://open.bigmodel.cn/api/anthropic"
+MODEL          = "glm-5.2"
+API_TIMEOUT_MS = 3000000
 
 
 def load_config() -> dict:
-    """环境变量优先于代码默认值（仅 API_KEY 走环境变量有用）"""
     return {
-        "api_key":       os.environ.get("ANTHROPIC_API_KEY") or API_KEY,
-        "base_url":      BASE_URL,
-        "model":         MODEL,
-        "timeout_ms":    API_TIMEOUT_MS,
+        "api_key":    os.environ.get("ANTHROPIC_API_KEY") or API_KEY,
+        "base_url":   BASE_URL,
+        "model":      MODEL,
+        "timeout_ms": API_TIMEOUT_MS,
     }
 
 
 def ensure_config() -> dict:
-    """
-    配置完整性检查。
-    缺失 API Key 时交互式提示用户输入（仅本次运行有效，不持久化）。
-    """
     config = load_config()
     if config["api_key"]:
         return config
-
     print("=" * 60)
     print("检测到尚未配置 API Key，请输入（仅本次运行有效）")
     print("如需持久化：请改 agent_team.py 顶部的 API_KEY 变量")
     print("=" * 60)
-
     api_key = input("\n请输入 API Key: ").strip()
     if not api_key:
         raise SystemExit("未提供 API Key，退出")
-
     config["api_key"] = api_key
     return config
 
 
-# 模块级占位：实际使用前由 __main__ 调用 init_client() 初始化
 client: Anthropic = None  # type: ignore
 
 
 def init_client() -> None:
-    """初始化模块级 client（在 __main__ 中调用）"""
     global client
     config = ensure_config()
-    kwargs = {
-        "api_key": config["api_key"],
-        "base_url": config["base_url"],
-        # Anthropic SDK 接收秒为单位的超时
-        "timeout": config["timeout_ms"] / 1000.0,
-    }
-    client = Anthropic(**kwargs)
+    client = Anthropic(
+        api_key=config["api_key"],
+        base_url=config["base_url"],
+        timeout=config["timeout_ms"] / 1000.0,
+    )
 
 
 # ============================================================
-# Part 2: 工具定义（demo1 三件套，无 subagent）
+# Part 2: 工具定义（demo1 四件套 + plan_team）
 # ============================================================
-# 每次请求随 tools 参数一起发给大模型，相当于一份「工具说明书」。
-# 大模型拿到说明书后就知道自己有哪些本地能力，但真正的执行发生在本地代码里。
-#
-# Team 模式下协调工作交给外部编排器（Team 类），不靠 LLM 调 subagent 工具。
 
-LOCAL_TOOLS = [
+TOOLS = [
     {
         "name": "execute_bash",
         "description": "执行任意 shell 命令，可用于文件操作、系统命令等",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "要执行的 shell 命令",
-                }
-            },
+            "properties": {"command": {"type": "string", "description": "要执行的 shell 命令"}},
             "required": ["command"],
         },
     },
@@ -132,12 +90,7 @@ LOCAL_TOOLS = [
         "description": "读取指定路径文件内容，返回文本",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "要读取的文件路径",
-                }
-            },
+            "properties": {"path": {"type": "string", "description": "要读取的文件路径"}},
             "required": ["path"],
         },
     },
@@ -147,41 +100,71 @@ LOCAL_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "要写入的文件路径"},
+                "path":    {"type": "string", "description": "要写入的文件路径"},
                 "content": {"type": "string", "description": "要写入的内容"},
             },
             "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "edit",
+        "description": "精确替换文件中的一段文本。比 write_file 整文件覆写更精细。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":        {"type": "string",  "description": "要编辑的文件路径"},
+                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配）"},
+                "new":         {"type": "string",  "description": "替换为的新文本"},
+                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false）"},
+            },
+            "required": ["path", "old", "new"],
+        },
+    },
+    {
+        "name": "plan_team",
+        "description": (
+            "为复杂任务组建多角色团队。你只需要规划角色（role），"
+            "任务由用户原始输入驱动，不需要你拆。\n\n"
+            "**使用时机**：需要多角色分工的复杂任务。"
+            "简单任务直接用其它本地工具完成。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "用户原始任务（可选，传给第一个成员）"},
+                "members": {
+                    "type": "array",
+                    "description": "团队成员列表，每项包含 name、role",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "成员英文名"},
+                            "role": {"type": "string", "description": "角色描述（简短，10字以内）"},
+                        },
+                        "required": ["name", "role"],
+                    },
+                },
+            },
+            "required": ["members"],
         },
     },
 ]
 
 
 # ============================================================
-# Part 3: 工具实现 + 路由表
+# Part 3: 工具实现 + Team 基础设施 + 路由表
 # ============================================================
-# 每个工具是一个普通 Python 函数：
-#   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
-#   - 设置超时，防止死循环或长时间阻塞
-#   - shell=True 让命令拥有更强能力（风险换能力）
 
 def execute_bash(command: str) -> str:
-    """执行 shell 命令"""
     try:
         result = subprocess.run(
-            command,
-            shell=True,            # 让命令拥有更强能力
-            capture_output=True,
-            encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
-            errors="replace",
-            timeout=60,            # 防止死循环 / 长时间阻塞
+            command, shell=True, capture_output=True,
+            encoding="utf-8", errors="replace", timeout=60,
         )
         output = []
-        if result.stdout:
-            output.append(result.stdout)
-        if result.stderr:
-            output.append(f"[stderr] {result.stderr}")
-        if result.returncode != 0:
-            output.append(f"[exit code: {result.returncode}]")
+        if result.stdout: output.append(result.stdout)
+        if result.stderr: output.append(f"[stderr] {result.stderr}")
+        if result.returncode != 0: output.append(f"[exit code: {result.returncode}]")
         return "\n".join(output) if output else "[命令执行成功，无输出]"
     except subprocess.TimeoutExpired:
         return "[错误] 命令执行超时（60 秒）"
@@ -190,7 +173,6 @@ def execute_bash(command: str) -> str:
 
 
 def read_file(path: str) -> str:
-    """读取文件内容"""
     try:
         if not os.path.exists(path):
             return f"[错误] 文件不存在: {path}"
@@ -207,7 +189,6 @@ def read_file(path: str) -> str:
 
 
 def write_file(path: str, content: str) -> str:
-    """写入文件"""
     try:
         dir_path = os.path.dirname(path)
         if dir_path and not os.path.exists(dir_path):
@@ -219,454 +200,306 @@ def write_file(path: str, content: str) -> str:
         return f"[错误] 写入文件失败: {e}"
 
 
-# 路由表：工具名 → 实际函数（调度核心）
-# 当大模型说「我要调用 execute_bash」时，Agent 通过这张表把名字映射到具体函数并执行。
-LOCAL_FUNCTIONS = {
-    "execute_bash": execute_bash,
-    "read_file":    read_file,
-    "write_file":   write_file,
-}
+def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
+    try:
+        if not os.path.exists(path): return f"[错误] 文件不存在: {path}"
+        if not old: return "[错误] old 不能为空"
+        with open(path, "r", encoding="utf-8") as f: content = f.read()
+        occurrences = content.count(old)
+        if occurrences == 0: return f"[错误] 未找到匹配文本，请用 read_file 确认精确内容"
+        new_content = content.replace(old, new) if replace_all else content.replace(old, new, 1)
+        with open(path, "w", encoding="utf-8") as f: f.write(new_content)
+        which = f"全部 {occurrences} 处" if replace_all else f"第 1 处（共 {occurrences} 处）"
+        return f"[成功] {path} 替换 {which}"
+    except Exception as e:
+        return f"[错误] 编辑文件失败: {e}"
 
 
-# ============================================================
-# Part 4: Agent 类（核心新增）
-# ============================================================
-# 与 agent_sub.py 的 _run_subagent 函数相比，Agent 是一个**持久化对象**：
-#   · self.name / self.role          → 固定身份（Subagent 是临时拼角色）
-#   · self.messages                  → 长期记忆（Subagent 是一次用完即丢）
-#   · self.inbox                     → 收件箱（Subagent 没有通信机制）
-#
-# 一个 Agent 可以被 chat() 多次——每次 chat 消化 inbox → 把新消息和任务
-# 追加到 messages → 走一个完整的 ReAct 循环 → 返回响应。messages 跨多次
-# chat 累积，构成"我之前做了什么、别人给我发了什么"的长期记忆。
+# ---- plan_team（demo5 新增） ----
+def plan_team(members: list, task: str = "") -> str:
+    """
+    启动多角色团队协作（demo5 新增）。
 
-STEP_MAX_ITERATIONS = 10
+    LLM 只拆角色，任务内嵌在 role 描述中 → recruit → 消息队列执行 → 返回结果。
+    """
+    if not members:
+        return "[Team] 成员列表为空"
+
+    team = Team()
+    for m in members:
+        team.recruit(m["name"], m.get("role", "团队成员"))
+
+    # recruit 完成后更新所有 Agent 的 system prompt（registry 完整了）
+    for name, agent in team.agents.items():
+        members_list = "\n".join(f"  {n}: {r}" for n, r in team.registry.items())
+        agent.system_prompt = (
+            f"你是 {name}\n\n"
+            f"职责: {team.registry[name]}\n\n"
+            f"团队成员:\n{members_list}\n\n"
+            f"规则:\n"
+            f"1. 能完成就自己完成\n"
+            f"2. 不能完成就在回复最开头用 [send: 成员名] 转交最合适的人"
+        )
+
+    # 随机挑一个——不匹配会 [send:] 转交，展示任务流转
+    first = random.choice(members)
+    msg = f"你的角色是：{first['role']}。"
+    if task:
+        msg += f"\n\n任务：{task}"
+    team.send("用户", first["name"], msg)
+
+    print(f"\n  [Team] 消息队列启动：{[m['name'] for m in members]}")
+    result = team.run(members)
+    return result
+
+
+# ---- Team 基础设施（Agent / Team 类） ----
+
+STEP_MAX_ITERATIONS = 20
 
 
 def _preview(text, limit: int = 60) -> str:
-    """截取字符串预览，超长加省略号"""
     text = str(text).replace("\n", " ").strip()
     return text[:limit] + ("..." if len(text) > limit else "")
 
 
-def build_agent_system_prompt(name: str, role: str) -> str:
-    """单个 Agent 的角色化 system prompt"""
-    return (
-        f"你是团队成员「{name}」，你的角色是：**{role}**。\n"
-        f"请专注完成交给你的任务。如果收到其他成员的消息，把它当作上下文输入。\n"
-        f"做完后用一两句话汇报结果。"
-    )
+class Event:
+    """消息队列中的事件"""
+    def __init__(self, sender: str, receiver: str, message: str):
+        self.sender   = sender
+        self.receiver = receiver
+        self.message  = message
 
 
 class Agent:
-    """
-    一个有身份、有记忆、有收件箱的 Agent。
+    """持久化 Agent——有 name/role、可路由消息给其他成员。"""
 
-    生命周期：
-        创建（team.recruit）→ 多次 chat → 项目结束（team.dismiss）→ 销毁
-    """
+    def __init__(self, name: str, role: str, registry: dict = None):
+        self.name     = name
+        self.role     = role
+        self.messages: list = []
 
-    def __init__(self, name: str, role: str, tools: list, local_fns: dict,
-                 verbose: bool = True):
-        self.name        = name
-        self.role        = role
-        self.tools       = tools                              # 可用工具列表
-        self.local_fns   = local_fns                          # 本地函数字典
-        self.verbose     = verbose
-        self.indent      = "    "                             # 打印缩进，让轨迹可视化
+        members = "\n".join(f"  {n}: {r}" for n, r in (registry or {}).items())
+        self.system_prompt = (
+            f"你是 {name}\n\n"
+            f"职责: {role}\n\n"
+            f"团队成员:\n{members}\n\n"
+            f"规则:\n"
+            f"1. 能完成就自己完成\n"
+            f"2. 不能完成就在回复最开头用 [send: 成员名] 转交最合适的人"
+        )
 
-        self.inbox: list = []                                 # 收件箱：[(sender, message), ...]
-        self.messages: list = []                              # 长期记忆（跨多次 chat 累积）
-        self.system_prompt = build_agent_system_prompt(name, role)
-
-        if verbose:
-            print(f"{self.indent}[Agent · {name}] 已创建，角色：{role}")
-
-    # ------------------------------------------------------------
-    # 通信：被其他 Agent（或 Team 编排器）调用
-    # ------------------------------------------------------------
-    def receive(self, sender: str, message: str) -> None:
-        """往 inbox 里塞一条消息。下次 chat() 时会被消化。"""
-        self.inbox.append((sender, message))
-        if self.verbose:
-            print(f"{self.indent}[Agent · {self.name}] 收到来自 {sender} 的消息："
-                  f"{_preview(message, 80)}")
-
-    # ------------------------------------------------------------
-    # 核心方法：一次 chat = 消化 inbox → 执行任务 → 走 ReAct
-    # ------------------------------------------------------------
-    def chat(self, task=None) -> str:
-        """
-        Args:
-            task: 本次要做的任务。可以是 None——仅消化 inbox 不接新任务。
-
-        Returns:
-            Agent 本次 chat 的最终回复文本
-        """
-        # 1) 消化 inbox：把所有未读消息包装成 user message 灌进 messages
-        if self.inbox:
-            for sender, msg in self.inbox:
-                wrapped = f"[来自 {sender} 的消息] {msg}"
-                self.messages.append({"role": "user", "content": wrapped})
-                if self.verbose:
-                    print(f"{self.indent}[Agent · {self.name}] 消化收件箱："
-                          f"{_preview(wrapped, 100)}")
-            self.inbox.clear()
-
-        # 2) 追加本次任务
-        if task:
-            self.messages.append({"role": "user", "content": task})
-            if self.verbose:
-                print(f"{self.indent}[Agent · {self.name}] 接到任务："
-                      f"{_preview(task, 100)}")
-
-        # 3) 走 ReAct 循环（与 agent_sub.py 的 _react_loop 同构，只是挂到实例上）
-        return self._react_loop()
-
-    # ------------------------------------------------------------
-    # ReAct 循环——和 agent_sub.py 主循环同构，只是挂到 Agent 实例上
-    # ------------------------------------------------------------
-    def _react_loop(self) -> str:
-        if self.verbose:
-            print(f"{self.indent}{'─' * 50}")
-            print(f"{self.indent}[Agent · {self.name}] 启动 ReAct 循环")
-            print(f"{self.indent}{'─' * 50}")
-
-        response = None
-        for i in range(1, STEP_MAX_ITERATIONS + 1):
-            if response is None:
-                response = client.messages.create(
-                    model=MODEL,
-                    max_tokens=4096,
-                    system=self.system_prompt,
-                    tools=self.tools,
-                    messages=self.messages,
-                )
-
+    def chat(self, event: Event = None) -> str:
+        tools = [t for t in TOOLS if t["name"] != "plan_team"]  # 去 plan_team 防递归
+        if event:
+            self.messages.append({"role": "user", "content":
+                f"[来自 {event.sender} 的消息] {event.message}"})
+        for _ in range(STEP_MAX_ITERATIONS):
+            response = client.messages.create(
+                model=MODEL, max_tokens=4096,
+                system=self.system_prompt, tools=tools, messages=self.messages,
+            )
             if response.stop_reason != "tool_use":
                 result = "".join(b.text for b in response.content if b.type == "text")
-                if self.verbose:
-                    print(f"{self.indent}[Agent · {self.name}] [迭代 {i} 完成] "
-                          f"{_preview(result, 120)}")
-                # 把最终回复也加入记忆（assistant turn）
                 self.messages.append({"role": "assistant", "content": response.content})
                 return result
-
-            # 打印思考文本
-            if self.verbose:
-                for block in response.content:
-                    if block.type == "text" and block.text.strip():
-                        print(f"{self.indent}  [LLM 思考] {_preview(block.text, 200)}")
-
             self.messages.append({"role": "assistant", "content": response.content})
-
             tool_results = []
             for block in response.content:
-                if block.type != "tool_use":
-                    continue
-                name = block.name
-                args = block.input or {}
-                if self.verbose:
-                    print(f"{self.indent}  [LLM] {name}({_preview(args, 80)})")
-
-                if name in self.local_fns:
-                    if self.verbose:
-                        print(f"{self.indent}  [工具 · 本地] {name}")
-                    try:
-                        result = str(self.local_fns[name](**args))
-                    except Exception as e:
-                        result = f"[错误] 本地工具 {name} 执行失败: {e}"
-                else:
-                    result = f"[错误] 未知工具: {name}"
-
-                if self.verbose:
-                    print(f"{self.indent}  [结果] {_preview(result, 120)}")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": str(result),
-                })
+                if block.type != "tool_use": continue
+                t_name = block.name; args = block.input or {}
+                print(f"    [{self.name}] {t_name}({_preview(str(args), 60)})")
+                fn = AVAILABLE_FUNCTIONS.get(t_name)
+                if fn:
+                    try: r = str(fn(**args))
+                    except Exception as e: r = f"[错误] {e}"
+                else: r = f"[错误] 未知工具: {t_name}"
+                print(f"    [{self.name}] → {_preview(r, 80)}")
+                tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": r})
             self.messages.append({"role": "user", "content": tool_results})
-
-            response = None
-
-        return f"[Agent · {self.name}] ReAct 循环未在 {STEP_MAX_ITERATIONS} 轮内完成"
-
-
-# ============================================================
-# Part 5: Team 类 + 状态机（核心新增）
-# ============================================================
-# Team 是 Agent 的协调器——demo5 的"项目组"。
-# 它提供 4 个核心动作：
-#   · recruit(name, role)        招募成员
-#   · send(a, b, msg)            一对一通信（依赖注入 / 质检反馈打回）
-#   · broadcast(sender, msg)     群发（成员完成任务后通报全员）
-#   · dismiss()                  解散团队
-#
-# 与 agent_sub.py 的 Subagent 相比：
-#   · Subagent 是函数，一次性；Agent 是对象，可被 chat() 多次唤起
-#   · Subagent 无 inbox；Agent 有 inbox，可被其他 Agent 塞消息
-#   · Subagent messages 用完即丢；Agent messages 跨多次 chat 累积
-#
-# 固定三角色流水线（不靠 LLM 动态规划）：
-#   Researcher → Writer → Reviewer
-#   · Researcher：调研主题，输出要点列表
-#   · Writer：基于要点写结构化研究报告（markdown）
-#   · Reviewer：验收报告，不通过则打回重做（最多 3 次）
-#
-# 状态机（任务级，不是 Agent 级）：
-#   researching → writing → reviewing → ┬→ passed (终态，报告输出)
-#                                       └→ redoing → writing → reviewing → ...
-#                                           (3 次不过 = failed)
-
-# 流水线阶段
-STAGE_RESEARCHING = "researching"
-STAGE_WRITING     = "writing"
-STAGE_REVIEWING   = "reviewing"
-STAGE_REDOING     = "redoing"
-STAGE_PASSED      = "passed"
-STAGE_FAILED      = "failed"
-
-MAX_REVIEW_ATTEMPTS = 3       # Writer 最多被质检打回 3 次
+        return "[Agent 未在限定轮数内完成]"
 
 
 class Team:
-    """一组互相协作的 Agent + 一个外部编排器。"""
+    """消息队列驱动的多 Agent 协调器"""
 
-    def __init__(self, tools: list, local_fns: dict, verbose: bool = True):
-        self.tools     = tools
-        self.local_fns = local_fns
-        self.verbose   = verbose
+    def __init__(self):
         self.agents: dict = {}
-        self.stage = STAGE_RESEARCHING      # 当前流水线阶段
+        self.registry: dict = {}    # {name: role}
+        self.queue: list = []       # Event 队列
 
-        if verbose:
-            print(f"\n{'=' * 60}")
-            print(f"Team 已创建（尚未招募成员）")
-            print(f"{'=' * 60}")
-
-    # ------------------------------------------------------------
-    # 4 个核心动作
-    # ------------------------------------------------------------
     def recruit(self, name: str, role: str) -> Agent:
-        """招募一个新成员"""
-        if name in self.agents:
-            print(f"[Team] 警告：成员 {name} 已存在，跳过")
-            return self.agents[name]
-        agent = Agent(
-            name=name, role=role,
-            tools=self.tools, local_fns=self.local_fns,
-            verbose=self.verbose,
-        )
+        self.registry[name] = role
+        agent = Agent(name, role, registry=self.registry)
         self.agents[name] = agent
+        print(f"  [Team] 招募 {name}（{role}）")
         return agent
 
     def send(self, sender: str, receiver: str, message: str) -> None:
-        """一对一通信：sender → receiver（依赖注入、质检反馈打回）"""
-        if receiver not in self.agents:
-            print(f"[Team] 错误：接收方 {receiver} 不存在")
-            return
-        if sender not in self.agents:
-            print(f"[Team] 警告：发送方 {sender} 不在团队中（仍允许）")
-        self.agents[receiver].receive(sender, message)
+        self.queue.append(Event(sender, receiver, message))
 
-    def broadcast(self, sender: str, message: str) -> None:
-        """群发：sender → 所有其他成员"""
-        for name, agent in self.agents.items():
-            if name == sender:
+    def run(self, members: list) -> str:
+        """事件循环：pop → agent.chat → 路由给其他成员"""
+        MAX_STEPS = len(members) * 3  # 每人最多被唤醒 3 次
+        last_result = ""
+        tried = set()
+        for _ in range(MAX_STEPS):
+            # 队列空 → 兜底：随机找个没试过的成员再发一次
+            if not self.queue:
+                remaining = [m for m in members if m["name"] not in tried]
+                if remaining:
+                    target = random.choice(remaining)
+                    self.send("系统", target["name"], "请检查是否有未完成的工作。")
+                    continue
+                break
+            event = self.queue.pop(0)
+            name = event.receiver
+            if name not in self.agents:
                 continue
-            agent.receive(sender, message)
+            print(f"\n  [event] {event.sender} → {name}：{_preview(event.message, 80)}")
+            result = self.agents[name].chat(event)
+            print(f"  [event] {name} 完成：{_preview(result, 100)}")
+            last_result = result
+            tried.add(name)
 
-    def dismiss(self) -> None:
-        """项目结束，解散团队"""
-        if self.verbose:
-            print(f"\n{'=' * 60}")
-            print(f"Team 解散——成员销毁，记忆丢失")
-            for name in self.agents:
-                print(f"  · {name}（{self.agents[name].role}）已离职")
-            print(f"{'=' * 60}")
-        self.agents.clear()
+            # 检查路由指令：[send: name]
+            m_send = re.match(r"\[send:\s*(\w+)\]", result)
+            if m_send:
+                target = m_send.group(1)
+                if target in self.agents:
+                    rest = result[m_send.end():].strip()
+                    print(f"  [send] {name} → {target}")
+                    self.send(name, target, rest or event.message)
+                    continue
 
-    # ------------------------------------------------------------
-    # 流水线入口（事件驱动状态机）
-    # ------------------------------------------------------------
-    def run_pipeline(self, topic: str) -> dict:
-        """
-        固定 Researcher→Writer→Reviewer 流水线。
+            # 无路由指令 → 不继续转发，等队列自然空
+        return last_result
 
-        事件驱动：
-          1. recruit 三角色
-          2. Researcher.chat(调研主题) → 结果 send 给 Writer
-          3. Writer.chat(基于要点写报告) → 结果 send 给 Reviewer
-          4. Reviewer.chat(质检报告) → passed / 打回 Writer 重做
-          5. passed → 把报告写到 <topic>.md → dismiss
-        """
-        if self.verbose:
-            print(f"\n[run_pipeline] 研究报告主题：{topic}")
 
-        # Step 1: recruit 三角色
-        if self.verbose:
-            print(f"\n[run_pipeline] 开始招募团队成员...")
-        self.recruit("Researcher", "研究员——调研主题，输出要点列表")
-        self.recruit("Writer",     "撰稿人——基于研究员的要点写结构化研究报告")
-        self.recruit("Reviewer",   "质检员——验收报告，不通过则打回重做")
-
-        # Step 2: Researcher 调研
-        self.stage = STAGE_RESEARCHING
-        if self.verbose:
-            print(f"\n[stage: {self.stage}] Researcher 开始调研")
-        research_task = (
-            f"请调研以下主题，输出 5-8 个要点（用编号列表）：\n\n"
-            f"主题：{topic}\n\n"
-            f"可以用 execute_bash / read_file 查本地资料，也可以直接基于你的知识调研。"
-            f"输出格式：编号列表，每条 1-2 句话。"
-        )
-        research_result = self.agents["Researcher"].chat(research_task)
-        # 把调研结果发给 Writer
-        self.send("Researcher", "Writer",
-                  f"调研要点如下，请基于这些要点写报告：\n\n{research_result}")
-
-        # Step 3 + 4: Writer 写 → Reviewer 质检（循环）
-        review_attempts = 0
-        writer_report = ""
-        while True:
-            # Step 3: Writer 写报告
-            self.stage = STAGE_WRITING if review_attempts == 0 else STAGE_REDOING
-            if self.verbose:
-                print(f"\n[stage: {self.stage}] Writer 开始写报告"
-                      f"{'（第 ' + str(review_attempts + 1) + ' 次撰写）' if review_attempts > 0 else ''}")
-            write_task = (
-                f"基于研究员给的要点，写一份结构化的研究报告（markdown 格式）。\n"
-                f"主题：{topic}\n\n"
-                f"要求：\n"
-                f"- 标题、概述、正文（分章节）、结论\n"
-                f"- 语言简洁清晰，避免空话\n"
-                f"- 直接输出 markdown 正文，不要包裹在代码块里"
-            )
-            writer_report = self.agents["Writer"].chat(write_task)
-            # 把报告发给 Reviewer
-            self.send("Writer", "Reviewer",
-                      f"待验收的报告（第 {review_attempts + 1} 次提交）：\n\n{writer_report}")
-
-            # Step 4: Reviewer 质检
-            self.stage = STAGE_REVIEWING
-            if self.verbose:
-                print(f"\n[stage: {self.stage}] Reviewer 开始质检（第 {review_attempts + 1} 次）")
-            review_task = (
-                "请严格验收上条报告。检查：内容是否覆盖主题、结构是否清晰、"
-                "是否有明显错误或空话。可以用 read_file / execute_bash 复查。\n\n"
-                "严格只输出 JSON（不要 markdown 代码块、不要任何解释）：\n"
-                '{"pass": true|false, "feedback": "若不通过，说明具体怎么改"}'
-            )
-            verdict_text = self.agents["Reviewer"].chat(review_task)
-            # 解析 JSON——prompt 已要求纯 JSON，解析失败默认不通过
-            try:
-                v = json.loads(verdict_text.strip())
-                passed = bool(v.get("pass") is True)
-                feedback = v.get("feedback") or ""
-            except json.JSONDecodeError:
-                passed = False
-                feedback = f"[质检员输出不是合法 JSON，默认不通过] 原文：{verdict_text}"
-
-            review_attempts += 1
-
-            if passed:
-                self.stage = STAGE_PASSED
-                if self.verbose:
-                    print(f"\n[stage: {self.stage}] Reviewer 通过（第 {review_attempts} 次质检）")
-                self.broadcast("Reviewer",
-                               f"报告通过质检（第 {review_attempts} 次质检）")
-                break
-
-            if review_attempts >= MAX_REVIEW_ATTEMPTS:
-                self.stage = STAGE_FAILED
-                if self.verbose:
-                    print(f"\n[stage: {self.stage}] Reviewer {MAX_REVIEW_ATTEMPTS} 次未通过，"
-                          f"流水线失败")
-                self.broadcast("Reviewer",
-                               f"报告 {MAX_REVIEW_ATTEMPTS} 次质检未通过，流水线终止")
-                break
-
-            # 打回 Writer 重做
-            self.stage = STAGE_REDOING
-            if self.verbose:
-                print(f"\n[stage: {self.stage}] Reviewer 第 {review_attempts} 次未通过，"
-                      f"打回 Writer 重做")
-                print(f"         反馈：{_preview(feedback, 150)}")
-            self.send("Reviewer", "Writer",
-                      f"质检未通过（第 {review_attempts} 次）。反馈：{feedback}")
-
-        # Step 5: 把报告落盘 + dismiss
-        # 文件名：把 topic 里的特殊字符替换掉
-        safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in topic)
-        if len(safe_name) > 40:
-            safe_name = safe_name[:40]
-        report_path = f"{safe_name}.md"
-        try:
-            with open(report_path, "w", encoding="utf-8") as f:
-                f.write(f"# 研究报告：{topic}\n\n")
-                f.write(f"> 由 demo5-multiagent/agent_team.py 的 Researcher→Writer→Reviewer 流水线生成\n")
-                f.write(f"> 质检次数：{review_attempts} / 状态：{self.stage}\n\n")
-                f.write(writer_report)
-            if self.verbose:
-                print(f"\n[run_pipeline] 报告已写入 {report_path}")
-        except Exception as e:
-            print(f"[run_pipeline] 写入报告失败: {e}")
-
-        results = {
-            "topic":     topic,
-            "stage":     self.stage,
-            "attempts":  review_attempts,
-            "report":    writer_report,
-            "path":      report_path,
-        }
-        self.dismiss()
-        return results
+# 路由表
+AVAILABLE_FUNCTIONS = {
+    "execute_bash": execute_bash,
+    "read_file":    read_file,
+    "write_file":   write_file,
+    "edit":         edit,
+    "plan_team":    plan_team,
+}
 
 
 # ============================================================
-# Part 6: 交互式入口
+# Part 4: Agent 主循环
+# ============================================================
+MAX_ITERATIONS = 30
+
+def _print_messages(messages: list) -> None:
+    print(f"[messages] 当前 {len(messages)} 条消息")
+    for i, msg in enumerate(messages):
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "text": parts.append(block.get("text", ""))
+                    elif block.get("type") == "tool_use": parts.append(f"[调用工具 {block.get('name')}]")
+                else:
+                    t = getattr(block, "type", None)
+                    if t == "text": parts.append(getattr(block, "text", ""))
+                    elif t == "tool_use": parts.append(f"[调用工具 {getattr(block, 'name', '')}]")
+            content = "\n".join(parts)
+        print(f"  [{i}] {msg.get('role', '?'):<9}: {_preview(content)}")
+
+
+def run_agent(user_input: str, verbose: bool = True) -> str:
+    system_prompt = "你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"
+    messages = [{"role": "user", "content": user_input}]
+
+    for loop_idx in range(1, MAX_ITERATIONS + 1):
+        if verbose:
+            print(f"\n{'=' * 60}")
+            print(f"第 {loop_idx} 轮 ReAct 循环")
+            print(f"{'=' * 60}")
+            _print_messages(messages)
+
+        response = client.messages.create(
+            model=MODEL, max_tokens=4096,
+            system=system_prompt, tools=TOOLS, messages=messages,
+        )
+
+        if verbose:
+            print(f"\n[LLM 决策] stop_reason = {response.stop_reason}")
+            for block in response.content:
+                if block.type == "text":
+                    preview = block.text[:80] + ("..." if len(block.text) > 80 else "")
+                    print(f"  - text      : {preview}")
+                elif block.type == "tool_use":
+                    print(f"  - tool_use  : {block.name}({block.input})")
+
+        if response.stop_reason != "tool_use":
+            if verbose:
+                print(f"\n[循环结束] 大模型判断任务完成，退出循环")
+            return "".join(b.text for b in response.content if b.type == "text")
+
+        messages.append({"role": "assistant", "content": response.content})
+
+        tool_results = []
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+            name = block.name
+            args = block.input or {}
+            fn = AVAILABLE_FUNCTIONS.get(name)
+            if fn is None:
+                result = f"[错误] 未知工具: {name}"
+            else:
+                if verbose:
+                    print(f"\n[执行工具] {name}({args})")
+                try:
+                    result = str(fn(**args))
+                except Exception as e:
+                    result = f"[错误] 工具 {name} 执行失败: {e}"
+
+            if verbose:
+                preview = str(result)[:200] + ("..." if len(str(result)) > 200 else "")
+                print(f"[工具结果] {preview}")
+
+            tool_results.append({
+                "type": "tool_result", "tool_use_id": block.id, "content": result,
+            })
+
+        messages.append({"role": "user", "content": tool_results})
+
+    return "[错误] 超过最大循环次数（{}），可能陷入死循环".format(MAX_ITERATIONS)
+
+
+# ============================================================
+# 交互式入口
 # ============================================================
 
 def main():
     init_client()
-
     print("=" * 60)
     print("Demo5 (Team) 已启动")
     print(f"模型:   {MODEL}")
     print(f"网关:   {BASE_URL}")
-    print(f"工具:   {', '.join(t['name'] for t in LOCAL_TOOLS)}")
+    print(f"工具:   {', '.join(t['name'] for t in TOOLS)}")
     print("=" * 60)
-    print("本节演示 Team 模式——Researcher→Writer→Reviewer 流水线 + 质检总闸门。")
-    print("输入任意主题，会生成一份研究报告并落盘。")
+    print("其中 `plan_team` 可启动多角色团队协作。")
     print("quit / exit 退出")
     print("=" * 60)
 
     while True:
         try:
-            topic = input("\n研究报告主题: ").strip()
+            user_input = input("\n用户: ").strip()
         except (KeyboardInterrupt, EOFError):
             print("\n再见！")
             break
-
-        if not topic:
-            continue
-        if topic.lower() in {"quit", "exit", "q"}:
+        if not user_input: continue
+        if user_input.lower() in {"quit", "exit", "q"}:
             print("再见！")
             break
-
         try:
-            team = Team(tools=LOCAL_TOOLS, local_fns=LOCAL_FUNCTIONS, verbose=True)
-            result = team.run_pipeline(topic)
-            print(f"\n{'=' * 60}")
-            print(f"[流水线完成] 状态：{result['stage']} / 质检次数：{result['attempts']}")
-            print(f"[报告路径] {result['path']}")
-            print(f"[报告预览]")
-            print("-" * 60)
-            preview = result["report"]
-            if len(preview) > 1000:
-                preview = preview[:1000] + "\n\n... [已截断，完整内容见文件]"
-            print(preview)
+            final = run_agent(user_input, verbose=True)
+            print(f"\n助手: {final}")
         except Exception as e:
             print(f"\n[错误] {e}")
 

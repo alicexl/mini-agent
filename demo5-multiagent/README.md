@@ -24,7 +24,7 @@
 
 ### Subagent（agent_sub.py）
 
-- demo1 的 3 件套（execute_bash / read_file / write_file）保留不变
+- demo1 的 4 件套（execute_bash / read_file / write_file / edit）保留不变
 - 新增 `subagent` 本地工具——主 Agent 遇到相互独立的子任务时派一个一次性 Subagent
 - **关键设计**：
   - **独立 context**：Subagent 有自己的 messages，与主 Agent 完全隔离
@@ -33,11 +33,10 @@
   - **工具集去 subagent**：子循环看不到 subagent 工具，防无限递归
 - **共用 `_react_loop`**：主 Agent 和 Subagent 跑同一个 ReAct 循环，差别只在传入的 messages/tools/system_prompt 是否独立——这就是"独立性"的本质
 - **subagent 不在路由表**：它需要"启动一个独立 ReAct 循环"的特殊逻辑，在 `_react_loop` 里单独拦截
-- 对应 Claude Code 的 Task tool / Cursor 的 agent / Devin 的子任务派发
 
 ### Team（agent_team.py）
 
-- demo1 的 3 件套保留不变；**不含 subagent 工具**——Team 的协调全靠外部编排器（Team 类），不靠 LLM 调 subagent 工具
+- demo1 的 4 件套保留不变；**不含 subagent 工具**——Team 的协调全靠外部编排器（Team 类），不靠 LLM 调 subagent 工具
 - **Agent 类升级**：从"一次性函数"升级为"持久化对象"
   - `self.name` / `self.role`：固定身份（Subagent 是临时拼角色）
   - `self.messages`：长期记忆，跨多次 `chat()` 累积
@@ -55,7 +54,6 @@
                                          (3 次不过 = failed)
   ```
 - **质检员 JSON 解析**：Reviewer 必须输出严格 JSON `{"pass": true|false, "feedback": "..."}`；解析失败默认不通过，原文塞进 feedback
-- 对应 AutoGen / CrewAI 范式
 
 ## 运行
 

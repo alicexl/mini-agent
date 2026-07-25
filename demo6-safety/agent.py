@@ -15,7 +15,7 @@ Demo6 - 带安全约束的 Agent（约束轴）
 
 单文件按 6 个 Part 组织：
     Part 1: LLM 客户端初始化（同 demo1）
-    Part 2: 工具定义（同 demo1，3 件套）
+    Part 2: 工具定义（同 demo1）
     Part 3: 三层安全栈（★ demo6 核心新增）
     Part 4: 原始工具实现 + dispatch_tool 统一调度入口
     Part 5: Agent 主循环（同 demo1，把 fn() 改成 dispatch_tool()）
@@ -27,9 +27,15 @@ Demo6 - 带安全约束的 Agent（约束轴）
 
 import fnmatch
 import os
+import select
 import subprocess
+import sys
 
 from anthropic import Anthropic
+
+# Windows 下的非阻塞 stdin 支持
+if sys.platform == "win32":
+    import msvcrt
 
 
 # ============================================================
@@ -143,6 +149,20 @@ TOOLS = [
                 "content": {"type": "string", "description": "要写入的内容"},
             },
             "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "edit",
+        "description": "精确替换文件中的一段文本。比 write_file 整文件覆写更精细。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":        {"type": "string",  "description": "要编辑的文件路径"},
+                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配）"},
+                "new":         {"type": "string",  "description": "替换为的新文本"},
+                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false）"},
+            },
+            "required": ["path", "old", "new"],
         },
     },
 ]
@@ -452,11 +472,33 @@ def _raw_write_file(path: str, content: str) -> str:
         return f"[错误] 写入文件失败: {e}"
 
 
+def _raw_edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
+    """精确替换文件中的文本"""
+    try:
+        if not os.path.exists(path):
+            return f"[错误] 文件不存在: {path}"
+        if not old:
+            return "[错误] old 不能为空"
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        occurrences = content.count(old)
+        if occurrences == 0:
+            return f"[错误] 未找到匹配文本，请用 read_file 确认精确内容"
+        new_content = content.replace(old, new) if replace_all else content.replace(old, new, 1)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        which = f"全部 {occurrences} 处" if replace_all else f"第 1 处（共 {occurrences} 处）"
+        return f"[成功] {path} 替换 {which}"
+    except Exception as e:
+        return f"[错误] 编辑文件失败: {e}"
+
+
 # 工具参数 key（用于 Permission 的 pattern 匹配）
 _TOOL_KEY_FIELD = {
     "execute_bash": "command",
     "read_file":    "path",
     "write_file":   "path",
+    "edit":         "path",
 }
 
 
@@ -509,6 +551,7 @@ def dispatch_tool(tool_name: str, tool_input: dict, verbose: bool = True) -> str
         "execute_bash": _raw_execute_bash,
         "read_file":    _raw_read_file,
         "write_file":   _raw_write_file,
+        "edit":         _raw_edit,
     }.get(tool_name)
 
     if raw_fn is None:
@@ -566,6 +609,18 @@ def _print_messages(messages: list) -> None:
     print()
 
 
+def _read_steering() -> str:
+    """非阻塞读 stdin——人在终端输入了内容就返回，没有返回空字符串"""
+    if sys.platform == "win32":
+        if msvcrt.kbhit():
+            return msvcrt.getwch()
+        return ""
+    else:
+        if select.select([sys.stdin], [], [], 0)[0]:
+            return sys.stdin.readline().strip()
+        return ""
+
+
 def run_agent(user_input: str, verbose: bool = True) -> str:
     """
     运行 Agent 处理一次用户任务。
@@ -587,6 +642,13 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
             print(f"第 {loop_idx} 轮 ReAct 循环")
             print(f"{'=' * 60}")
             _print_messages(messages)
+
+        # ---- 人工介入：非阻塞 stdin 注入 ----
+        steering = _read_steering()
+        if steering:
+            messages.append({"role": "user", "content": f"[用户介入] {steering}"})
+            if verbose:
+                print(f"\n[人工介入] {steering}")
 
         # ---- 决策：大模型思考下一步 ----
         response = client.messages.create(

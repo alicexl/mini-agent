@@ -23,7 +23,7 @@
 
 ### plan（自动决策版）
 
-- demo1 的 3 件套（execute_bash / read_file / write_file）保留不变
+- demo1 的工具保留不变
 - demo4 新增 `plan` + `use_skill` 两个工具
 - **plan**：LLM 列步骤（字符串数组），Agent 打印清单。一次性可视化，不追踪进度。plan 调用一次后从 tools 移除
 - **何时用由 LLM 自动判断**：

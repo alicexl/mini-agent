@@ -86,11 +86,11 @@ def init_client() -> None:
 
 
 # ============================================================
-# Part 2: 本地工具定义（demo1 三件套 + plan / use_skill）
+# Part 2: 工具定义（demo1 四件套 + plan / use_skill）
 # ============================================================
-# demo1 的 3 件套保留不变，demo4 新增 plan + use_skill。
+# demo1 的工具保留不变，demo4 新增 plan + use_skill。
 
-LOCAL_TOOLS = [
+TOOLS = [
     {
         "name": "execute_bash",
         "description": "执行任意 shell 命令，可用于文件操作、系统命令等",
@@ -129,6 +129,20 @@ LOCAL_TOOLS = [
                 "content": {"type": "string", "description": "要写入的内容"},
             },
             "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "edit",
+        "description": "精确替换文件中的一段文本。比 write_file 整文件覆写更精细。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":        {"type": "string",  "description": "要编辑的文件路径"},
+                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配）"},
+                "new":         {"type": "string",  "description": "替换为的新文本"},
+                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false）"},
+            },
+            "required": ["path", "old", "new"],
         },
     },
     {
@@ -239,6 +253,27 @@ def write_file(path: str, content: str) -> str:
         return f"[错误] 写入文件失败: {e}"
 
 
+def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
+    """精确替换文件中的文本"""
+    try:
+        if not os.path.exists(path):
+            return f"[错误] 文件不存在: {path}"
+        if not old:
+            return "[错误] old 不能为空"
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        occurrences = content.count(old)
+        if occurrences == 0:
+            return f"[错误] 未找到匹配文本，请用 read_file 确认精确内容"
+        new_content = content.replace(old, new) if replace_all else content.replace(old, new, 1)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        which = f"全部 {occurrences} 处" if replace_all else f"第 1 处（共 {occurrences} 处）"
+        return f"[成功] {path} 替换 {which}"
+    except Exception as e:
+        return f"[错误] 编辑文件失败: {e}"
+
+
 def plan(steps: list) -> str:
     """
     任务规划（demo4 新增）——仅在复杂多步任务开头调用一次。
@@ -276,11 +311,12 @@ _PLAN: list = []
 
 # 路由表：工具名 → 实际函数（调度核心）
 # 当大模型说「我要调用 execute_bash」时，Agent 通过这张表把名字映射到具体函数并执行。
-LOCAL_FUNCTIONS = {
+AVAILABLE_FUNCTIONS = {
     "use_skill":    use_skill,
     "execute_bash": execute_bash,
     "read_file":    read_file,
     "write_file":   write_file,
+    "edit":         edit,
     "plan":         plan,
 }
 
@@ -454,7 +490,7 @@ def run_agent(
     _PLAN = []  # 每次新任务清空
     system_prompt = build_system_prompt(_SKILLS)
     messages = [{"role": "user", "content": user_input}]
-    tools = list(LOCAL_TOOLS)  # 可变副本，plan 调用一次后移除
+    tools = list(TOOLS)  # 可变副本，plan 调用一次后移除
 
     for loop_idx in range(1, MAX_ITERATIONS + 1):
         if verbose:
@@ -496,7 +532,7 @@ def run_agent(
                 # 通过路由表把工具名分发到实际函数
                 name = block.name
                 args = block.input or {}
-                fn = LOCAL_FUNCTIONS.get(name)
+                fn = AVAILABLE_FUNCTIONS.get(name)
                 if fn is None:
                     result = f"[错误] 未知工具: {name}"
                 else:
@@ -561,8 +597,8 @@ def main():
     else:
         print(f"[Skills] 未在 {SKILLS_DIR} 找到任何 .md 文件（Agent 仍可运行）")
 
-    print(f"\n[Tools] 共 {len(LOCAL_TOOLS)} 个本地工具："
-          f"{', '.join(t['name'] for t in LOCAL_TOOLS)}")
+    print(f"\n[Tools] 共 {len(TOOLS)} 个本地工具："
+          f"{', '.join(t['name'] for t in TOOLS)}")
     print("[Tools] 其中 `plan` 用于复杂多步任务的规划，`use_skill` 用于获取 skill 工作流正文")
 
     print("\n命令:   /skills 查看已加载 skills / quit 退出")

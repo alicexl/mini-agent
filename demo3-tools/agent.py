@@ -3,23 +3,16 @@
 """
 Demo3-tools - 工具扩展轴的 Agent
 
-公式：demo1 = LLM × 工具 × 循环 × 状态
-      demo3 = base × 工具
+公式：demo3 = base × MCP
 
-「工具轴」两类增量：
-    (A) 能力维度：edit 提供 read+write 做不到的精细修改
-    (B) 协议维度：MCP 让工具可以跨进程 / 跨机器 / 跨语言复用
+在 demo1-react（base）基础上叠加 MCP 协议——跨进程工具协议，
+JSON-RPC 2.0 + HTTP Transport，工具可跨语言、跨机器复用。
 
-单文件按 5 个 Part 组织：
-    Part 1: LLM 客户端初始化（同 demo1）
-    Part 2: 本地工具定义（execute_bash / read_file / write_file + 新增 edit）
-    Part 3: 本地工具实现 + 路由表
-    Part 4: MCP 客户端（JSON-RPC 2.0 over HTTP Transport）
-    Part 5: Agent 主循环（ReAct，本地/MCP 统一分发）
+单文件 5 个 Part：客户端 / 工具定义 / 工具实现 / MCP 客户端 / 主循环
 
 启动顺序：
-    1. 先在另一个终端启动 MCP Server：  python mcp_server.py
-    2. 再启动 Agent：                    python agent.py
+    1. 先启动 MCP Server：  python mcp_server.py
+    2. 再启动 Agent：       python agent.py
 """
 
 import os
@@ -100,15 +93,15 @@ def init_client() -> None:
 
 
 # ============================================================
-# Part 2: 本地工具定义（demo3 新增 edit）
+# Part 2: 工具定义（同 demo1 base）
 # ============================================================
 # 每次请求随 tools 参数一起发给大模型，相当于一份「工具说明书」。
 # 大模型拿到说明书后就知道自己有哪些本地能力，但真正的执行发生在本地代码里。
 #
-# demo1 的 3 件套（execute_bash / read_file / write_file）保留不变。
+# demo1 的工具保留不变。
 # demo3 在此基础上**新增 1 个本地工具 edit** —— 精细修改（string replacement）。
 
-LOCAL_TOOLS = [
+TOOLS = [
     {
         "name": "execute_bash",
         "description": "执行任意 shell 命令，可用于文件操作、系统命令等",
@@ -150,7 +143,6 @@ LOCAL_TOOLS = [
         },
     },
     {
-        # === demo3 新增 ===
         "name": "edit",
         "description": (
             "精确替换文件中的一段文本（string replacement）。"
@@ -237,8 +229,7 @@ def write_file(path: str, content: str) -> str:
 
 
 def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
-    """
-    精确替换文件中的一段文本（demo3 新增）。
+    """精确替换文件中的文本。"""
 
     与 write_file 的核心区别：
         - write_file：发整文件内容 → 重写整文件
@@ -278,7 +269,7 @@ def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
 # 路由表：工具名 → 实际函数（调度核心）
 # 当大模型说「我要调用 execute_bash」时，Agent 通过这张表把名字映射到具体函数并执行。
 # 注：MCP 工具不在此表——Part 5 的 _dispatch_tool 统一分发时，本地工具走此表，其它走 MCP。
-LOCAL_FUNCTIONS = {
+AVAILABLE_FUNCTIONS = {
     "execute_bash": execute_bash,
     "read_file":    read_file,
     "write_file":   write_file,
@@ -409,11 +400,11 @@ def _dispatch_tool(
     verbose: bool,
 ) -> str:
     """统一工具分发：本地 or MCP。LLM 不需要知道工具在哪，只按名字调用。"""
-    if name in LOCAL_FUNCTIONS:
+    if name in AVAILABLE_FUNCTIONS:
         if verbose:
             print(f"  [工具 · 本地] {name}({_preview(str(args), 80)})")
         try:
-            return str(LOCAL_FUNCTIONS[name](**args))
+            return str(AVAILABLE_FUNCTIONS[name](**args))
         except Exception as e:
             return f"[错误] 本地工具 {name} 执行失败: {e}"
 
@@ -512,7 +503,7 @@ def main():
         print(f"[MCP] 请确认已在另一个终端运行：python mcp_server.py")
 
     # ---- 合并工具（schema 统一，直接拼接）----
-    all_tools = LOCAL_TOOLS + mcp_tools
+    all_tools = TOOLS + mcp_tools
     print(f"[Tools] 合并后共 {len(all_tools)} 个工具：{', '.join(t['name'] for t in all_tools)}")
 
     print("\n命令:   /tools 查看工具 / quit 退出")
@@ -534,7 +525,7 @@ def main():
         if user_input.lower() in {"/tools", "/t"}:
             print(f"\n--- 当前 {len(all_tools)} 个工具 ---")
             for t in all_tools:
-                src = "本地" if t["name"] in LOCAL_FUNCTIONS else "MCP"
+                src = "本地" if t["name"] in AVAILABLE_FUNCTIONS else "MCP"
                 print(f"  [{src}] {t['name']}: {t.get('description', '')[:60]}")
             continue
 

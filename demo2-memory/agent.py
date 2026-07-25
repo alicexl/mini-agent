@@ -12,7 +12,7 @@ Demo2 - 带记忆的 Agent（记忆轴）
 
 单文件按 6 个 Part 组织：
     Part 1: LLM 客户端初始化（同 demo1）
-    Part 2: 工具定义（同 demo1，3 件套）
+    Part 2: 工具定义（同 demo1）
     Part 3: 工具实现 + 路由表（同 demo1）
     Part 4: 长期记忆系统（agent_memory.md 滑动窗口）
     Part 5: 上下文管理（compact_messages 动态压缩 + cache_control caching）
@@ -146,6 +146,20 @@ TOOLS = [
             "required": ["path", "content"],
         },
     },
+    {
+        "name": "edit",
+        "description": "精确替换文件中的一段文本。比 write_file 整文件覆写更精细。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":        {"type": "string",  "description": "要编辑的文件路径"},
+                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配）"},
+                "new":         {"type": "string",  "description": "替换为的新文本"},
+                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false）"},
+            },
+            "required": ["path", "old", "new"],
+        },
+    },
 ]
 
 SYSTEM_PROMPT_BASE = """你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"""
@@ -214,12 +228,34 @@ def write_file(path: str, content: str) -> str:
         return f"[错误] 写入文件失败: {e}"
 
 
+def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
+    """精确替换文件中的文本"""
+    try:
+        if not os.path.exists(path):
+            return f"[错误] 文件不存在: {path}"
+        if not old:
+            return "[错误] old 不能为空"
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        occurrences = content.count(old)
+        if occurrences == 0:
+            return f"[错误] 未找到匹配文本，请用 read_file 确认精确内容"
+        new_content = content.replace(old, new) if replace_all else content.replace(old, new, 1)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        which = f"全部 {occurrences} 处" if replace_all else f"第 1 处（共 {occurrences} 处）"
+        return f"[成功] {path} 替换 {which}"
+    except Exception as e:
+        return f"[错误] 编辑文件失败: {e}"
+
+
 # 路由表：工具名 → 实际函数（调度核心）
 # 当大模型说「我要调用 execute_bash」时，Agent 通过这张表把名字映射到具体函数并执行。
 AVAILABLE_FUNCTIONS = {
     "execute_bash": execute_bash,
-    "read_file": read_file,
-    "write_file": write_file,
+    "read_file":    read_file,
+    "write_file":   write_file,
+    "edit":         edit,
 }
 
 
