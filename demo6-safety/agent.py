@@ -3,21 +3,20 @@
 """
 Demo6 - 带安全约束的 Agent（约束轴）
 
-在 demo1（base = LLM × 工具 × 循环 × 状态）基础上叠加「约束轴」：给 Agent 的"手脚"
-（execute_bash / read_file / write_file）加**三层声明式安全栈**，让危险操作可配置、
-可观测、可拦截——而不是硬编码在某个工具函数里。
+在 demo1（base = LLM × 工具 × 循环 × 状态）基础上叠加「约束轴」：在 LLM 决策和原始
+工具执行之间插入**两层 Runtime Control**，让危险操作可配置、可观测、可拦截——
+而不是硬编码在某个工具函数里。
 
-    × Permission（规则引擎）  —— 工具调用前的访问控制（allow / deny / ask）
-    × Sandbox（执行隔离）    —— Bash profile 限制（read-only / write-only / none）
-    × Hook（事件回调）       —— PreToolUse / PostToolUse 可插拔观察者
+    × Permission（规则引擎） —— 策略层：工具调用前的访问控制（allow / deny / ask）
+    × Hook（事件回调）      —— 扩展层：PreToolUse / PostToolUse 可插拔扩展（Pre 拦截 / Post 补改）
 
 公式：demo6 = base × 约束
 
 单文件按 6 个 Part 组织：
     Part 1: LLM 客户端初始化（同 demo1）
     Part 2: 工具定义（同 demo1）
-    Part 3: 三层安全栈（★ demo6 核心新增）
-    Part 4: 原始工具实现 + dispatch_tool 统一调度入口
+    Part 3: 工具实现（同 demo1：execute_bash / read_file / write_file / edit）
+    Part 4: Runtime Control（★ demo6 核心新增：Permission + Hook + dispatch_tool）
     Part 5: Agent 主循环（同 demo1，把 fn() 改成 dispatch_tool()）
     Part 6: 交互式入口
 
@@ -27,15 +26,10 @@ Demo6 - 带安全约束的 Agent（约束轴）
 
 import fnmatch
 import os
-import select
+import re
 import subprocess
-import sys
 
 from anthropic import Anthropic
-
-# Windows 下的非阻塞 stdin 支持
-if sys.platform == "win32":
-    import msvcrt
 
 
 # ============================================================
@@ -153,41 +147,134 @@ TOOLS = [
     },
     {
         "name": "edit",
-        "description": "精确替换文件中的一段文本。比 write_file 整文件覆写更精细。",
+        "description": (
+            "精确替换文件中的一段文本（string replacement）。"
+            "比 write_file 整文件覆写更精细，适合改一行 / 改一个值。"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "path":        {"type": "string",  "description": "要编辑的文件路径"},
-                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配）"},
+                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配，含空格/缩进）"},
                 "new":         {"type": "string",  "description": "替换为的新文本"},
-                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false）"},
+                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false，只替换第一处）"},
             },
             "required": ["path", "old", "new"],
         },
     },
 ]
 
-SYSTEM_PROMPT = """你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"""
+
+# ============================================================
+# Part 3: 工具实现 + 路由表
+# ============================================================
+# 每个工具是一个普通 Python 函数：
+#   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
+#   - 设置超时，防止死循环或长时间阻塞
+
+def execute_bash(command: str) -> str:
+    """执行 shell 命令"""
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
+            errors="replace",
+            timeout=60,            # 防止死循环 / 长时间阻塞
+        )
+        output = []
+        if result.stdout:
+            output.append(result.stdout)
+        if result.stderr:
+            output.append(f"[stderr] {result.stderr}")
+        if result.returncode != 0:
+            output.append(f"[exit code: {result.returncode}]")
+        return "\n".join(output) if output else "[命令执行成功，无输出]"
+    except subprocess.TimeoutExpired:
+        return "[错误] 命令执行超时（60 秒）"
+    except Exception as e:
+        return f"[错误] 命令执行失败: {e}"
+
+
+def read_file(path: str) -> str:
+    """读取文件内容"""
+    try:
+        if not os.path.exists(path):
+            return f"[错误] 文件不存在: {path}"
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        max_length = 20000
+        if len(content) > max_length:
+            content = content[:max_length] + f"\n\n... [内容已截断，共 {len(content)} 字符]"
+        return content
+    except UnicodeDecodeError:
+        return "[错误] 文件不是有效的文本文件或编码不支持"
+    except Exception as e:
+        return f"[错误] 读取文件失败: {e}"
+
+
+def write_file(path: str, content: str) -> str:
+    """写入文件"""
+    try:
+        dir_path = os.path.dirname(path)
+        if dir_path and not os.path.exists(dir_path):
+            os.makedirs(dir_path, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"[成功] 文件已写入: {path} ({len(content)} 字符)"
+    except Exception as e:
+        return f"[错误] 写入文件失败: {e}"
+
+
+def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
+    """精确替换文件中的文本"""
+    try:
+        if not os.path.exists(path):
+            return f"[错误] 文件不存在: {path}"
+        if not old:
+            return "[错误] old 不能为空"
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        occurrences = content.count(old)
+        if occurrences == 0:
+            return f"[错误] 未找到匹配文本，请用 read_file 确认精确内容"
+        new_content = content.replace(old, new) if replace_all else content.replace(old, new, 1)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        which = f"全部 {occurrences} 处" if replace_all else f"第 1 处（共 {occurrences} 处）"
+        return f"[成功] {path} 替换 {which}"
+    except Exception as e:
+        return f"[错误] 编辑文件失败: {e}"
+
+
+# 路由表：工具名 → 实际函数（调度核心）
+# 当大模型说「我要调用 execute_bash」时，Agent 通过这张表把名字映射到具体函数并执行。
+AVAILABLE_FUNCTIONS = {
+    "execute_bash": execute_bash,
+    "read_file":    read_file,
+    "write_file":   write_file,
+    "edit":         edit,
+}
 
 
 # ============================================================
-# Part 3: 三层安全栈（★ demo6 核心新增）
+# Part 4: Runtime Control（★ demo6 核心新增）
 # ============================================================
 # demo1 的工具是「裸奔」的——execute_bash 想跑什么就跑什么，write_file 想写哪里就写哪里。
-# 真实 Agent（Claude Code / Cursor）都有声明式的安全栈，把"能不能做"从工具函数里抽出来，
-# 变成**可配置、可插拔、可观测**的独立层。
+# 真实 Agent（Claude Code / Cursor）都在 LLM 和原始工具之间插入 Runtime Control，
+# 把"能不能做"从工具函数里抽出来，变成**可配置、可插拔、可观测**的独立层。
 #
-# demo6 实现三层，对应三个不同的抽象：
-#   · Permission —— 策略层：规则匹配 → allow / deny / ask（类似 Claude Code 的 permission)
-#   · Sandbox    —— 执行层：profile 限制 Bash 能跑哪类命令（类似 firejail / Docker)
-#   · Hook       —— 观察层：Pre/PostToolUse 回调，可拦、可改、可记录（类似 Claude Code 的 hook)
+# Runtime Control 分两层（dispatch_tool 串接，任一层阻断都返回错误给大模型）：
+#   · Permission —— 策略层：规则匹配 → allow / deny / ask（类似 Claude Code 的 permission）
+#   · Hook       —— 扩展层：Pre/PostToolUse 回调，可拦、可改、可记录（类似 Claude Code 的 hook）
 #
-# 三层关系：Hook 可改 input 或拦 → Permission 决策是否允许 → Sandbox 限制实际执行。
-# 任一层阻断都返回错误信息给大模型，让它看到原因后调整策略。
+# 两层关系：Hook 可改 input 或拦 → Permission 决策是否允许 → 放行后执行原始工具。
+# 大模型从错误信息里看到原因，自行调整策略。
 
 
 # ------------------------------------------------------------
-# Part 3.1: Permission —— 声明式规则引擎
+# Part 4.1: Permission —— 声明式规则引擎
 # ------------------------------------------------------------
 # 规则格式：(tool_name, pattern, action)
 #   tool_name: 工具名（execute_bash / read_file / write_file）
@@ -197,53 +284,29 @@ SYSTEM_PROMPT = """你是一个有用的助手，可以通过工具与系统交�
 #
 # 匹配顺序：从上到下，first-match wins（先命中的规则决定结果）。
 # 无命中时走 DEFAULT_POLICY。
-#
-# 为什么是声明式而不是硬编码 if-else？
-#   · 配置即策略：修改规则不用改代码（生产里从 YAML 加载）
-#   · 可审计：整张规则表一眼看完，PR 审查友好
-#   · 可组合：用户/项目/会话级规则按优先级叠加（Claude Code 的 enterprise 模式）
 
 PERMISSION_RULES = [
     # —— 显式 deny —— 绝不让 LLM 跑的命令
     ("execute_bash", "rm -rf *",       "deny"),
-    ("execute_bash", "rm -fr *",       "deny"),
-    ("execute_bash", "dd *of=/dev/*",  "deny"),
     ("execute_bash", "mkfs.*",         "deny"),
     ("execute_bash", "shutdown*",      "deny"),
-    ("execute_bash", "reboot*",        "deny"),
-    ("execute_bash", "halt*",          "deny"),
-    ("execute_bash", "poweroff*",      "deny"),
     ("execute_bash", "curl *| *sh*",   "deny"),
-    ("execute_bash", "wget *| *sh*",   "deny"),
 
     # —— 显式 allow —— 安全只读类，免确认
     ("execute_bash", "ls *",           "allow"),
+    ("execute_bash", "dir *",          "allow"),
     ("execute_bash", "cat *",          "allow"),
     ("execute_bash", "grep *",         "allow"),
-    ("execute_bash", "find *",         "allow"),
-    ("execute_bash", "head *",         "allow"),
-    ("execute_bash", "tail *",         "allow"),
-    ("execute_bash", "wc *",           "allow"),
-    ("execute_bash", "pwd",            "allow"),
-    ("execute_bash", "echo *",         "allow"),
-    ("execute_bash", "git status*",    "allow"),
-    ("execute_bash", "git diff*",      "allow"),
-    ("execute_bash", "git log*",       "allow"),
 
     # —— 其他 execute_bash：问一下
     ("execute_bash", "*",              "ask"),
 
-    # —— read_file：项目内放行，项目外问一下（防止读敏感配置）
+    # —— read_file / write_file：默认放行
     ("read_file",    "*",              "allow"),
-
-    # —— write_file：项目内放行，项目外问一下
     ("write_file",   "*",              "allow"),
 ]
 
 DEFAULT_POLICY = "ask"
-
-# 项目目录：用于 write_file 路径决策（写到项目外需要 ask）
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 全局免确认开关（用户输入 a 后置 True，本会话所有 ask 自动通过）
 _auto_approve_all = False
@@ -284,244 +347,150 @@ def confirm_action(prompt: str) -> bool:
 
 
 # ------------------------------------------------------------
-# Part 3.2: Sandbox —— Bash 执行隔离 profile
+# Part 4.2: Hook（Lifecycle Extension）—— PreToolUse / PostToolUse 事件回调
 # ------------------------------------------------------------
-# 限制 execute_bash 能跑哪类命令。三档 profile：
-#   "read-only":  只允许读类命令（ls / cat / grep / find / head / tail / wc / ps / df / du）
-#   "write-full": 允许写类命令（mkdir / touch / rm / mv / cp / echo > / chmod / chown）
-#   "none":       不限制（demo1 base 行为）
+# Hook 是可插拔的 Lifecycle Extension：在工具调用生命周期的前后点注入自定义逻辑。
+# Claude Code 把这类机制叫 "hook"；概念上它是「在生命周期点上扩展行为」，所以本 demo
+# 也称它为 Lifecycle Extension——两个名字同一个东西。
 #
-# 实现说明：本 demo 用「命令前缀白名单」近似沙箱——能演示概念，但**不是真隔离**。
-# 真隔离要靠 OS-level 工具：Linux firejail / bubblewrap / Docker；Windows AppContainer。
-# 因为 shell 永远绕得过去（python -c、base64 解码、变量拼接），白名单只挡"明显违规"。
-
-SANDBOX_PROFILE = "none"   # ← 改成 "read-only" 体验沙箱拦截效果
-
-SANDBOX_COMMAND_PREFIXES = {
-    "read-only":  {"ls", "cat", "grep", "find", "head", "tail", "wc",
-                   "pwd", "whoami", "ps", "df", "du", "echo", "git"},
-    "write-full": {"ls", "cat", "grep", "find", "head", "tail", "wc",
-                   "pwd", "whoami", "ps", "df", "du", "echo", "git",
-                   "mkdir", "touch", "rm", "mv", "cp", "chmod", "chown",
-                   "ln", "tar", "zip", "unzip"},
-    "none":       None,   # None 表示不检查
-}
-
-
-def check_sandbox(command: str) -> tuple:
-    """
-    返回 (allowed, reason)。
-    allowed=True 表示通过沙箱检查；allowed=False 时 reason 是拒绝原因。
-    """
-    if SANDBOX_PROFILE == "none" or SANDBOX_COMMAND_PREFIXES.get(SANDBOX_PROFILE) is None:
-        return True, ""
-
-    # 取命令首个 token（最朴素的解析；管道 / 重定向在 demo6 不展开——讲稿会点明这个简化）
-    first_token = command.strip().split()[0] if command.strip() else ""
-    # 兼容 "git status" 这种——前缀取 "git"
-    first_token = first_token.split("/")[0]
-
-    allowed_prefixes = SANDBOX_COMMAND_PREFIXES[SANDBOX_PROFILE]
-    if first_token in allowed_prefixes:
-        return True, ""
-    return False, (
-        f"沙箱拦截：profile={SANDBOX_PROFILE!r} 不允许命令前缀 {first_token!r}；"
-        f"允许的前缀：{sorted(allowed_prefixes)}"
-    )
-
-
-# ------------------------------------------------------------
-# Part 3.3: Hook —— PreToolUse / PostToolUse 事件回调
-# ------------------------------------------------------------
-# Hook 是可插拔的观察者：在工具执行前/后注入自定义逻辑。
-#
-# 本 demo 用 Python callable 内联实现（生产级如 Claude Code 用**外部脚本 + JSON IPC**）：
-#   · 协议：subprocess.run([script], input=json_payload) → stdout=json_response, exit_code
-#   · exit 0=pass / exit 2=block（仅 Pre） / 其他=错误
-#   · response 可携带 modified_input / message
+# 本 demo 用 Python callable 内联实现。
 #
 # Hook 函数签名：
-#   pre_hook(tool_name, tool_input) -> dict  返回 {"decision": "pass"|"block", "message": "..."}
-#   post_hook(tool_name, tool_input, tool_output) -> dict  返回 {"message": "..."}
+#   pre_hook(tool_name, tool_input) -> dict
+#       返回 {"decision": "pass"|"block"|"modify", ...}
+#         pass 放行不改 / block 拦截 / modify 改写 input 后放行（带 modified_input）
+#   post_hook(tool_name, tool_input, tool_output) -> dict
+#       返回 {"message": "...", "modified_output": "...", "output_delta": "..."}
+#         modified_output 替换整个 output（如把读出的密钥脱敏）/ output_delta 追加到末尾回灌 LLM
 #
 # 下方注册两个示例 hook：
-#   1. block_secret_write：Pre，拦截写入含 "PASSWORD" 的文件
-#   2. log_all_calls：Post，把每次工具调用记到 .demo6_hook_log
+#   1. inject_shebang：Pre，给 write_file 写的 .sh 脚本补上 #!/bin/bash shebang（modify）
+#   2. scan_output：Post，把读出内容里的密钥脱敏成 [xxxxx] 并补「已脱敏」提示（modified_output + output_delta）
 
 
-def hook_block_secret_write(tool_name: str, tool_input: dict) -> dict:
-    """Pre 示例：拦截写入含敏感关键词的文件。大小写不敏感匹配。"""
+# Post hook（scan_output）用它把读出内容里的密钥值替换为 [xxxxx]（保留 key，大小写不敏感）。
+# 教学版只认 password / api_key / secret 这几种 key。
+_REDACT_RE = re.compile(
+    r'((?:password|api_key|apikey|secret)\s*[:=]\s*)\S+',
+    re.IGNORECASE,
+)
+
+
+def hook_inject_shebang(tool_name: str, tool_input: dict) -> dict:
+    """Pre 示例：给 write_file 写的 .sh 脚本补上 #!/bin/bash shebang 再放行（不改路径、不拦截）。
+
+    这体现 Hook 区别于 Permission 的杀手锏——Permission 只能 allow/deny/ask，改不了
+    input；Hook 能「改写」：检测到写 .sh 脚本时，若开头没有 shebang，就在最前面补一行
+    #!/bin/bash，让脚本可以 ./script 直接执行（不用 bash script）。
+    """
     if tool_name != "write_file":
         return {"decision": "pass"}
+    path = tool_input.get("path", "")
+    if not path.endswith(".sh"):                  # 只管 .sh 脚本
+        return {"decision": "pass"}
     content = tool_input.get("content", "")
-    content_lower = content.lower()
-    for secret in ("password", "api_key=", "private key", "begin rsa"):
-        if secret in content_lower:
-            return {
-                "decision": "block",
-                "message": f"Hook 拦截：内容含敏感关键词 {secret!r}，拒绝写入",
-            }
-    return {"decision": "pass"}
+    if content.startswith("#!"):                  # 已有 shebang（任意 #! 开头）就不重复加
+        return {"decision": "pass"}
+    new_input = dict(tool_input)
+    new_input["content"] = "#!/bin/bash\n" + content
+    return {
+        "decision": "modify",
+        "modified_input": new_input,
+        "message": "Hook 注入：写入 .sh 脚本，已在开头补上 #!/bin/bash shebang",
+    }
 
 
-def hook_log_all_calls(tool_name: str, tool_input: dict, tool_output: str) -> dict:
-    """Post 示例：把每次工具调用追加到 .demo6_hook_log。"""
-    log_path = os.path.join(PROJECT_DIR, ".demo6_hook_log")
-    try:
-        with open(log_path, "a", encoding="utf-8") as f:
-            preview_in = str(tool_input).replace("\n", " ")[:120]
-            preview_out = str(tool_output).replace("\n", " ")[:120]
-            f.write(f"{tool_name}\tinput={preview_in}\toutput={preview_out}\n")
-    except Exception as e:
-        return {"message": f"log hook 失败: {e}"}
-    return {"message": "logged"}
+def hook_scan_output(tool_name: str, tool_input: dict, tool_output: str) -> dict:
+    """Post 示例：把工具输出里的疑似密钥/凭证脱敏成 [xxxxx]，再补「已脱敏」提示。
+
+    read_file 读出的明文密钥（password=hunter2）原样回灌有外传风险——Post 在「回灌前」把值换成
+    [xxxxx]：modified_output 让 dispatch_tool 替换整个 output，output_delta 追加提示。
+    """
+    redacted, n = _REDACT_RE.subn(r"\1[xxxxx]", tool_output)
+    if n == 0:
+        return {"message": "no secrets detected", "output_delta": ""}
+    delta = f"\n\nℹ️ [Post hook] 输出含疑似凭证，已将 {n} 处敏感值脱敏为 [xxxxx]。"
+    return {"message": f"redacted {n}", "modified_output": redacted, "output_delta": delta}
 
 
 # 注册表：event → list of hooks
 HOOKS = {
-    "PreToolUse":  [hook_block_secret_write],
-    "PostToolUse": [hook_log_all_calls],
+    "PreToolUse":  [hook_inject_shebang],
+    "PostToolUse": [hook_scan_output],
 }
 
 
 def run_hooks(event: str, tool_name: str, *args) -> dict:
     """
     运行某 event 下所有 hook，合并结果。
-    PreToolUse: 任一 hook 返回 block 即整体 block。
-    PostToolUse: 只收集 message。
+    PreToolUse: block 立即终止；modify 链式改写 input（后一个 hook 看到前一个改写后的 input）。
+    PostToolUse: 收集 message + output_delta；modified_output 取最后一个 hook 的（替换整个 output，
+                 如把读出的密钥脱敏）。教学版单 Post hook，不做链式替换。
     """
-    aggregated = {"decision": "pass", "messages": []}
+    aggregated = {"decision": "pass", "messages": [], "output_delta": "", "modified_output": None}
+    current_input = args[0] if (event == "PreToolUse" and args) else None
     for hook in HOOKS.get(event, []):
         try:
-            result = hook(tool_name, *args)
+            hook_args = (current_input,) if event == "PreToolUse" else args
+            result = hook(tool_name, *hook_args)
         except Exception as e:
             result = {"message": f"hook 异常: {e}"}
 
-        if event == "PreToolUse" and result.get("decision") == "block":
-            aggregated["decision"] = "block"
-            aggregated["block_message"] = result.get("message", "hook 拦截")
-            break
+        if event == "PreToolUse":
+            decision = result.get("decision", "pass")
+            if decision == "block":
+                aggregated["decision"] = "block"
+                aggregated["block_message"] = result.get("message", "hook 拦截")
+                break
+            if decision == "modify" and result.get("modified_input") is not None:
+                current_input = result["modified_input"]
+                aggregated["decision"] = "modify"
+        if event == "PostToolUse" and result.get("modified_output") is not None:
+            aggregated["modified_output"] = result["modified_output"]
         if result.get("message"):
             aggregated["messages"].append(result["message"])
+        if result.get("output_delta"):
+            aggregated["output_delta"] += result["output_delta"]
+    if aggregated["decision"] == "modify":
+        aggregated["modified_input"] = current_input
     return aggregated
 
 
-# ============================================================
-# Part 4: 原始工具实现 + dispatch_tool 统一调度
-# ============================================================
-# 每个工具是一个普通 Python 函数：
-#   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
-#   - 设置超时，防止死循环或长时间阻塞
-#   - shell=True 让命令拥有更强能力（风险换能力）
-#
-# 原始工具函数（_raw_*）与 demo1 字节一致——它们是"裸能力"。
-# dispatch_tool 是 demo6 的核心：把三层安全栈串在"大模型决策 → 工具执行"之间。
-
-def _raw_execute_bash(command: str) -> str:
-    """执行 shell 命令（裸实现，同 demo1）"""
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,            # 让命令拥有更强能力
-            capture_output=True,
-            encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
-            errors="replace",
-            timeout=60,            # 防止死循环 / 长时间阻塞
-        )
-        output = []
-        if result.stdout:
-            output.append(result.stdout)
-        if result.stderr:
-            output.append(f"[stderr] {result.stderr}")
-        if result.returncode != 0:
-            output.append(f"[exit code: {result.returncode}]")
-        return "\n".join(output) if output else "[命令执行成功，无输出]"
-    except subprocess.TimeoutExpired:
-        return "[错误] 命令执行超时（60 秒）"
-    except Exception as e:
-        return f"[错误] 命令执行失败: {e}"
-
-
-def _raw_read_file(path: str) -> str:
-    """读取文件内容（裸实现，同 demo1）"""
-    try:
-        if not os.path.exists(path):
-            return f"[错误] 文件不存在: {path}"
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        max_length = 20000
-        if len(content) > max_length:
-            content = content[:max_length] + f"\n\n... [内容已截断，共 {len(content)} 字符]"
-        return content
-    except UnicodeDecodeError:
-        return "[错误] 文件不是有效的文本文件或编码不支持"
-    except Exception as e:
-        return f"[错误] 读取文件失败: {e}"
-
-
-def _raw_write_file(path: str, content: str) -> str:
-    """写入文件（裸实现，同 demo1）"""
-    try:
-        dir_path = os.path.dirname(path)
-        if dir_path and not os.path.exists(dir_path):
-            os.makedirs(dir_path, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        return f"[成功] 文件已写入: {path} ({len(content)} 字符)"
-    except Exception as e:
-        return f"[错误] 写入文件失败: {e}"
-
-
-def _raw_edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
-    """精确替换文件中的文本"""
-    try:
-        if not os.path.exists(path):
-            return f"[错误] 文件不存在: {path}"
-        if not old:
-            return "[错误] old 不能为空"
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        occurrences = content.count(old)
-        if occurrences == 0:
-            return f"[错误] 未找到匹配文本，请用 read_file 确认精确内容"
-        new_content = content.replace(old, new) if replace_all else content.replace(old, new, 1)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-        which = f"全部 {occurrences} 处" if replace_all else f"第 1 处（共 {occurrences} 处）"
-        return f"[成功] {path} 替换 {which}"
-    except Exception as e:
-        return f"[错误] 编辑文件失败: {e}"
-
-
-# 工具参数 key（用于 Permission 的 pattern 匹配）
-_TOOL_KEY_FIELD = {
-    "execute_bash": "command",
-    "read_file":    "path",
-    "write_file":   "path",
-    "edit":         "path",
-}
+# dispatch_tool：把上面的 Permission(4.1) + Hook(4.2) 串进"大模型决策 → 工具执行"之间。
 
 
 def dispatch_tool(tool_name: str, tool_input: dict, verbose: bool = True) -> str:
     """
-    demo6 的核心调度入口：串三层安全栈后再执行工具。
+    demo6 的核心调度入口：串两层 Runtime Control 后再执行工具。
 
     流程：
-        1. PreToolUse hooks     —— 可观察 / 拦截
-        2. Permission check     —— allow / deny / ask
-        3. Sandbox check        —— 仅 execute_bash，profile 白名单
-        4. 执行原始工具
-        5. PostToolUse hooks    —— 可观察 / 记录
+        1. PreToolUse hooks     —— 可观察 / 拦截 / 改写 input（Extension Layer）
+        2. Permission check     —— allow / deny / ask（Policy Layer）
+        3. 执行原始工具（用 Pre 改写后的 input）
+        4. PostToolUse hooks    —— 可观察 / 替换 / 补改 output（Extension Layer）
 
     返回字符串（与裸工具一致），错误信息也字符串化回灌给大模型。
     """
-    # ---- 1. PreToolUse hooks ----
+    # 工具参数 key（用于 Permission 的 pattern 匹配）：只有 dispatch_tool 用，就内联在这里
+    _TOOL_KEY_FIELD = {
+        "execute_bash": "command",
+        "read_file":    "path",
+        "write_file":   "path",
+        "edit":         "path",
+    }
+
+    # ---- 1. PreToolUse hooks（可观察 / 拦截 / 改写 input）----
     pre_result = run_hooks("PreToolUse", tool_name, tool_input)
     if pre_result["decision"] == "block":
         msg = pre_result.get("block_message", "PreToolUse hook 拦截")
         if verbose:
             print(f"  [Hook · Pre] 拦截: {msg}")
         return f"[Hook 拦截] {msg}"
+    if pre_result["decision"] == "modify":
+        tool_input = pre_result["modified_input"]
+        if verbose:
+            msg = "; ".join(pre_result.get("messages", [])) or "input 已改写"
+            print(f"  [Hook · Pre] 改写输入: {msg}")
 
     # ---- 2. Permission check ----
     key_field = _TOOL_KEY_FIELD.get(tool_name, "")
@@ -538,21 +507,8 @@ def dispatch_tool(tool_name: str, tool_input: dict, verbose: bool = True) -> str
             return f"[Permission 拒绝] 用户未允许 {tool_name}({key_value!r})"
     # action == "allow"：直接放行
 
-    # ---- 3. Sandbox check（仅 execute_bash）----
-    if tool_name == "execute_bash":
-        allowed, reason = check_sandbox(tool_input.get("command", ""))
-        if not allowed:
-            if verbose:
-                print(f"  [Sandbox · block] {reason}")
-            return f"[Sandbox 拦截] {reason}"
-
-    # ---- 4. 执行原始工具 ----
-    raw_fn = {
-        "execute_bash": _raw_execute_bash,
-        "read_file":    _raw_read_file,
-        "write_file":   _raw_write_file,
-        "edit":         _raw_edit,
-    }.get(tool_name)
+    # ---- 3. 执行原始工具 ----
+    raw_fn = AVAILABLE_FUNCTIONS.get(tool_name)
 
     if raw_fn is None:
         return f"[错误] 未知工具: {tool_name}"
@@ -562,8 +518,12 @@ def dispatch_tool(tool_name: str, tool_input: dict, verbose: bool = True) -> str
     except Exception as e:
         return f"[错误] 工具 {tool_name} 执行失败: {e}"
 
-    # ---- 5. PostToolUse hooks ----
-    run_hooks("PostToolUse", tool_name, tool_input, output)
+    # ---- 4. PostToolUse hooks（可观察 / 替换 / 补改 output）----
+    post_result = run_hooks("PostToolUse", tool_name, tool_input, output)
+    if post_result.get("modified_output") is not None:
+        output = post_result["modified_output"]   # Post 替换整个 output（如把读出的密钥脱敏成 [xxxxx]）
+    if post_result.get("output_delta"):
+        output += post_result["output_delta"]     # Post 补的内容（如「已脱敏」提示）回灌给 LLM
 
     return output
 
@@ -609,18 +569,6 @@ def _print_messages(messages: list) -> None:
     print()
 
 
-def _read_steering() -> str:
-    """非阻塞读 stdin——人在终端输入了内容就返回，没有返回空字符串"""
-    if sys.platform == "win32":
-        if msvcrt.kbhit():
-            return msvcrt.getwch()
-        return ""
-    else:
-        if select.select([sys.stdin], [], [], 0)[0]:
-            return sys.stdin.readline().strip()
-        return ""
-
-
 def run_agent(user_input: str, verbose: bool = True) -> str:
     """
     运行 Agent 处理一次用户任务。
@@ -632,9 +580,10 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
     Returns:
         Agent 的最终文本回复
 
-    与 demo1 的唯一差异：工具执行走 dispatch_tool（带三层安全栈），而不是直接 fn(**input)。
+    与 demo1 的唯一差异：工具执行走 dispatch_tool（带 Runtime Control），而不是直接 fn(**input)。
     """
     messages = [{"role": "user", "content": user_input}]
+    system_prompt = "你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"
 
     for loop_idx in range(1, MAX_ITERATIONS + 1):
         if verbose:
@@ -643,18 +592,11 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
             print(f"{'=' * 60}")
             _print_messages(messages)
 
-        # ---- 人工介入：非阻塞 stdin 注入 ----
-        steering = _read_steering()
-        if steering:
-            messages.append({"role": "user", "content": f"[用户介入] {steering}"})
-            if verbose:
-                print(f"\n[人工介入] {steering}")
-
         # ---- 决策：大模型思考下一步 ----
         response = client.messages.create(
             model=MODEL,
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             tools=TOOLS,
             messages=messages,
         )
@@ -674,13 +616,13 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
                 print(f"\n[循环结束] 大模型判断任务完成，退出循环")
             return "".join(b.text for b in response.content if b.type == "text")
 
-        # ---- 行动 + 感知：通过 dispatch_tool 串三层安全栈后执行 ----
+        # ---- 行动 + 感知：通过 dispatch_tool 串 Runtime Control 后执行 ----
         messages.append({"role": "assistant", "content": response.content})
 
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                # ★ demo6 核心变化：通过 dispatch_tool 把工具名分发到实际函数（带三层安全栈）
+                # ★ demo6 核心变化：通过 dispatch_tool 把工具名分发到实际函数（带 Runtime Control）
                 if verbose:
                     print(f"\n[执行工具] {block.name}({block.input})")
                 result = dispatch_tool(block.name, block.input, verbose=verbose)
@@ -709,41 +651,46 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
 # Part 6: 交互式入口
 # ============================================================
 
-def ensure_test_dir() -> str:
-    """准备演示用的测试目录（4 个文件），返回路径。演示删除/清理任务时用。"""
-    test_dir = os.path.join(PROJECT_DIR, "test_dir")
+def ensure_test_dir(base_dir: str) -> str:
+    """准备演示用的测试目录（5 个文件），返回路径。演示删除/清理/读取任务时用。"""
+    test_dir = os.path.join(base_dir, "test_dir")
     os.makedirs(test_dir, exist_ok=True)
     for name in ("a.txt", "b.txt", "c.log", "d.tmp"):
         fp = os.path.join(test_dir, name)
         if not os.path.exists(fp):
             with open(fp, "w", encoding="utf-8") as f:
                 f.write(f"this is {name}\n")
+    # db.conf 含明文凭证，演示 Post hook 扫描输出（read_file 它 → 命中密钥 → 替换成 [xxxxx] + 提示）
+    db_conf = os.path.join(test_dir, "db.conf")
+    if not os.path.exists(db_conf):
+        with open(db_conf, "w", encoding="utf-8") as f:
+            f.write("db_host=db.example.com\n")
+            f.write("api_key=sk-proj-demo1234567890abcdef\n")
+            f.write("password=hunter2\n")
     return test_dir
 
 
 if __name__ == "__main__":
     init_client()
 
-    test_dir = ensure_test_dir()
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    test_dir = ensure_test_dir(project_dir)
 
     print("=" * 60)
-    print("Demo6 Agent 已启动（安全约束版——三层安全栈）")
+    print("Demo6 Agent 已启动（安全约束版——两层 Runtime Control）")
     print(f"模型:          {MODEL}")
     print(f"网关:          {BASE_URL}")
-    print(f"项目目录:      {PROJECT_DIR}")
-    print(f"测试目录:      {test_dir}（已准备好 4 个文件供演示）")
-    print(f"Sandbox:       {SANDBOX_PROFILE}")
+    print(f"项目目录:      {project_dir}")
+    print(f"测试目录:      {test_dir}（已准备好 5 个文件供演示）")
     print(f"Permission:    {len(PERMISSION_RULES)} 条规则，默认 {DEFAULT_POLICY!r}")
     print(f"Hook:          PreToolUse {len(HOOKS.get('PreToolUse', []))} 个 / "
           f"PostToolUse {len(HOOKS.get('PostToolUse', []))} 个")
     print("=" * 60)
     print("演示建议：")
-    print("  · 演示 1（Permission deny）：让 Agent 跑 'rm -rf test_dir/'")
-    print("  · 演示 2（Permission ask）：  让 Agent 跑未在 allow 列表的命令，如 'whoami'")
-    print("  · 演示 3（Sandbox）：         把 SANDBOX_PROFILE 改为 'read-only'，")
-    print("                               让 Agent 跑 'rm test_dir/a.txt'")
-    print("  · 演示 4（Hook 拦截）：       让 Agent 写入含 'PASSWORD' 的文件")
-    print("  · 演示 5（Hook 日志）：       任意任务结束后查看 .demo6_hook_log")
+    print("  · 演示 1（Permission deny）：让 Agent 删除 test_dir 目录")
+    print("  · 演示 2（Permission allow）：让 Agent 看看 test_dir 目录下有什么文件")
+    print("  · 演示 3（Hook 注入）：       让 Agent 在 test_dir 下写个 hi.sh，内容是 echo hello")
+    print("  · 演示 4（Hook 扫输出）：     read_file test_dir/db.conf，看 Post hook 把密钥脱敏成 [xxxxx]")
     print("命令：quit / exit / q 退出")
     print("=" * 60)
 

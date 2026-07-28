@@ -136,14 +136,17 @@ ALL_TOOLS = [
     },
     {
         "name": "edit",
-        "description": "精确替换文件中的一段文本。比 write_file 整文件覆写更精细。",
+        "description": (
+            "精确替换文件中的一段文本（string replacement）。"
+            "比 write_file 整文件覆写更精细，适合改一行 / 改一个值。"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "path":        {"type": "string",  "description": "要编辑的文件路径"},
-                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配）"},
+                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配，含空格/缩进）"},
                 "new":         {"type": "string",  "description": "替换为的新文本"},
-                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false）"},
+                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false，只替换第一处）"},
             },
             "required": ["path", "old", "new"],
         },
@@ -178,7 +181,7 @@ def execute_bash(command: str) -> str:
     try:
         result = subprocess.run(
             command,
-            shell=True,            # 让命令拥有更强能力
+            shell=True,
             capture_output=True,
             encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
             errors="replace",
@@ -259,11 +262,10 @@ def subagent(role: str, task: str) -> str:
     tools = [t for t in ALL_TOOLS if t["name"] != "subagent"]
     indent = "    "  # 缩进打印，区分主/子 Agent 轨迹
 
-    if True:  # verbose 恒为 True，教学演示需要
-        print(f"{indent}{'─' * 50}")
-        print(f"{indent}[Subagent · depth=1] role={role!r}")
-        print(f"{indent}[Subagent · depth=1] task={_preview(task, 100)}")
-        print(f"{indent}{'─' * 50}")
+    print(f"{indent}{'─' * 50}")
+    print(f"{indent}[Subagent · depth=1] role={role!r}")
+    print(f"{indent}[Subagent · depth=1] task={_preview(task, 100)}")
+    print(f"{indent}{'─' * 50}")
 
     sub_messages = [{"role": "user", "content": task}]
     sub_system_prompt = (
@@ -356,16 +358,14 @@ def _react_loop(
         verbose:       是否打印轨迹
         indent:        打印缩进，让 subagent 轨迹可视化区分
     """
-    response = None
     for i in range(1, STEP_MAX_ITERATIONS + 1):
-        if response is None:
-            response = client.messages.create(
-                model=MODEL,
-                max_tokens=4096,
-                system=system_prompt,
-                tools=tools,
-                messages=messages,
-            )
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=4096,
+            system=system_prompt,
+            tools=tools,
+            messages=messages,
+        )
 
         # 判停
         if response.stop_reason != "tool_use":
@@ -410,8 +410,6 @@ def _react_loop(
                 "content": str(result),
             })
         messages.append({"role": "user", "content": tool_results})
-
-        response = None
 
     return f"[ReAct 循环未在 {STEP_MAX_ITERATIONS} 轮内完成]"
 

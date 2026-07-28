@@ -148,21 +148,22 @@ TOOLS = [
     },
     {
         "name": "edit",
-        "description": "精确替换文件中的一段文本。比 write_file 整文件覆写更精细。",
+        "description": (
+            "精确替换文件中的一段文本（string replacement）。"
+            "比 write_file 整文件覆写更精细，适合改一行 / 改一个值。"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "path":        {"type": "string",  "description": "要编辑的文件路径"},
-                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配）"},
+                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配，含空格/缩进）"},
                 "new":         {"type": "string",  "description": "替换为的新文本"},
-                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false）"},
+                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false，只替换第一处）"},
             },
             "required": ["path", "old", "new"],
         },
     },
 ]
-
-SYSTEM_PROMPT_BASE = """你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"""
 
 
 # ============================================================
@@ -171,14 +172,13 @@ SYSTEM_PROMPT_BASE = """你是一个有用的助手，可以通过工具与系�
 # 每个工具是一个普通 Python 函数：
 #   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
 #   - 设置超时，防止死循环或长时间阻塞
-#   - shell=True 让命令拥有更强能力（风险换能力）
 
 def execute_bash(command: str) -> str:
     """执行 shell 命令"""
     try:
         result = subprocess.run(
             command,
-            shell=True,            # 让命令拥有更强能力
+            shell=True,
             capture_output=True,
             encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
             errors="replace",
@@ -337,9 +337,10 @@ def build_system_prompt(verbose: bool = False) -> str:
         else:
             print(f"[记忆] 无历史记忆（首次运行或文件为空）")
 
+    base = "你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"
     if not memory.strip():
-        return SYSTEM_PROMPT_BASE
-    return SYSTEM_PROMPT_BASE + "\n\n## 历史任务记忆（最近）\n\n" + memory
+        return base
+    return base + "\n\n## 历史任务记忆（最近）\n\n" + memory
 
 
 # ============================================================
@@ -360,14 +361,6 @@ def build_system_prompt(verbose: bool = False) -> str:
 # 压缩触发阈值（消息条数）。生产级按 token 占比触发（见总览第八节）。
 COMPACT_THRESHOLD_MESSAGES = 10  # 演示用低阈值，方便短任务就触发一次压缩
 COMPACT_KEEP_RECENT        = 4   # 压缩时保留最近 N 条原始消息
-
-COMPACT_SYSTEM_PROMPT = """你是上下文压缩助手。把下面的 Agent 对话历史压缩成一段简洁的事实摘要。
-
-要求：
-1. 保留：用户意图、关键决策、工具调用的核心结果（文件路径/数字/结论）
-2. 丢弃：重复的试错、冗长的工具原始输出、无关细节
-3. 用一段 200-400 字的连贯叙述输出，不要分点列条
-4. 不要加任何前缀说明，直接输出摘要内容"""
 
 
 def _build_system_param(system_prompt: str):
@@ -476,11 +469,19 @@ def compact_messages(messages: list, verbose: bool = False) -> list:
         transcript_parts.append(f"### {role}\n{text}")
     transcript = "\n\n".join(transcript_parts)
 
+    compact_system_prompt = """你是上下文压缩助手。把下面的 Agent 对话历史压缩成一段简洁的事实摘要。
+
+要求：
+1. 保留：用户意图、关键决策、工具调用的核心结果（文件路径/数字/结论）
+2. 丢弃：重复的试错、冗长的工具原始输出、无关细节
+3. 用一段 200-400 字的连贯叙述输出，不要分点列条
+4. 不要加任何前缀说明，直接输出摘要内容"""
+
     try:
         response = client.messages.create(
             model=MODEL,
             max_tokens=1024,
-            system=COMPACT_SYSTEM_PROMPT,
+            system=compact_system_prompt,
             messages=[{"role": "user", "content": f"对话历史：\n\n{transcript}\n\n请输出压缩摘要："}],
         )
         summary = "".join(b.text for b in response.content if b.type == "text")

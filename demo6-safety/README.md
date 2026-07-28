@@ -1,19 +1,16 @@
 # Demo6 — 安全约束轴
 
-> 在 demo1（base = LLM × 工具 × 循环 × 状态）基础上叠加「约束轴」：给 Agent 的"手脚"（execute_bash / read_file / write_file）加**三层声明式安全栈**——可配置、可观测、可拦截，而不是硬编码在某个工具函数里。
+> 在 demo1（base = LLM × 工具 × 循环 × 状态）基础上叠加「约束轴」：在 LLM 决策和原始工具之间插入**两层 Runtime Control**——可配置、可观测、可拦截，而不是硬编码在某个工具函数里。
 >
 > 公式：`demo6 = base × 约束`
 
 ## 文档导航
 
-- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（7 章）
-  1. 结论：demo6 vs demo1（"裸手"风险）
-  2. 三层栈总览（dispatch_tool 流程）
-  3. Permission：声明式规则引擎（allow / deny / ask）
-  4. Sandbox：执行隔离 profile（read-only / write-full / none）
-  5. Hook：PreToolUse / PostToolUse 事件回调
-  6. 局限与工业级演进（firejail / Docker / microVM / JSON IPC Hook）
-  7. 后续轴预告（系列回顾）
+- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（4 章 + 附录）
+  1. 结论：demo6 vs demo1（execute_bash 无约束 + 两个 Runtime Control）
+  2. Permission：声明式规则引擎（allow / deny / ask）
+  3. Hook：PreToolUse / PostToolUse 事件回调
+  4. 局限、演进和总结（firejail / Docker / microVM）
 
 概念讲解、设计原理、演进方向全部在讲稿里。本 README 只讲**怎么跑起来**。
 
@@ -21,29 +18,30 @@
 
 | 文件 | 说明 |
 |---|---|
-| `agent.py` | 单文件实现（6 个 Part：客户端 / 工具定义 / 三层安全栈 / 工具实现 + dispatch_tool / 主循环 / 入口） |
+| `agent.py` | 单文件实现（6 个 Part：客户端 / 工具定义 / 工具实现 / Runtime Control（Permission+Hook+dispatch_tool）/ 主循环 / 入口） |
 | `讲稿.md` | 教学讲稿 |
 
 ## 设计要点
 
-### 三层安全栈（dispatch_tool 串接）
+### 两层 Runtime Control（dispatch_tool 串接）
 
-每次工具调用按顺序过三层，任一层阻断都返回错误给大模型：
+每次工具调用按顺序过两层，任一层阻断都返回错误给大模型：
 
-| 层 | 抽象 | 实现 | 拦截示例 |
+| 层 | 抽象 | 实现 | 示例 |
 |---|---|---|---|
-| **Permission** | 策略层 | `PERMISSION_RULES` 列表 + fnmatch | `rm -rf *` → deny |
-| **Sandbox** | 执行层 | `SANDBOX_PROFILE` 命令前缀白名单 | read-only profile 拦 `rm` |
-| **Hook** | 观察层 | `HOOKS` 注册表 + Python callable | 写含 PASSWORD 的文件被 Pre 拦 |
+| **Permission**（策略层） | 准入决策 | `PERMISSION_RULES` 列表 + fnmatch | `rm -rf *` → deny |
+| **Hook**（扩展层 / Lifecycle Extension） | 事件回调 | `HOOKS` 注册表 + Python callable | Pre 注入（写 `.sh` 脚本 → 补 `#!/bin/bash` shebang，改 input 不拦截）；Post 扫输出（命中密钥 → 替换成 `[xxxxx]` 并补「已脱敏」提示） |
 
-### 与 demo7（旧版）的差异
+> 真正的执行隔离（firejail / Docker / microVM）属于 Execution Environment，在调用链路之下，不在本 demo 范围——见讲稿第 4 章。
 
-| 维度 | demo7（旧） | demo6（新） |
+### 与朴素黑名单方案的差异
+
+| 维度 | 朴素黑名单方案 | demo6 |
 |---|---|---|
-| 防线抽象 | 黑名单 regex + 用户确认 + 输出截断 | Permission / Sandbox / Hook 三层正交栈 |
-| 配置风格 | 硬编码 regex | 声明式规则（PERMISSION_RULES / SANDBOX_PROFILE / HOOKS） |
+| 防线抽象 | 黑名单 regex + 用户确认 + 输出截断 | Permission + Hook 两层 Runtime Control |
+| 配置风格 | 硬编码 regex | 声明式规则（PERMISSION_RULES / HOOKS） |
 | 可扩展性 | 加规则要改代码 | 加规则只改配置；hook 可插拔 |
-| 对标产品 | 启发式脚本 | Claude Code permissions / sandbox / hooks |
+| 对标产品 | 启发式脚本 | Claude Code permissions / hooks |
 
 ## 运行
 
@@ -83,7 +81,7 @@ API_TIMEOUT_MS  = 3000000                                    # 50 分钟
 python agent.py
 ```
 
-启动后会自动建好 `test_dir/` 测试目录（4 个文件：a.txt / b.txt / c.log / d.tmp）。
+启动后会自动建好 `test_dir/` 测试目录（5 个文件：a.txt / b.txt / c.log / d.tmp / db.conf）。
 
 | 命令 | 作用 |
 |---|---|
@@ -96,19 +94,17 @@ python agent.py
 
 | 演示 | 演示什么 | 操作 |
 |---|---|---|
-| **1 Permission deny** | 命中 deny 规则直接拦 | 输入「删掉 test_dir 目录」 → 看 LLM 第一次跑 `rm -rf test_dir/` 被拦，改用单文件删除 |
-| **2 Permission ask** | catch-all 走用户确认 | 输入「跑一下 whoami」 → 走 `*` 规则 → `ask` |
-| **3 Sandbox 拦截** | profile 白名单拦 | 改 `SANDBOX_PROFILE = "read-only"`，输入「删掉 test_dir/a.txt」 → Permission 通过但 Sandbox 拦 |
-| **4 Hook 拦截敏感词** | Pre hook 拦 | 输入「把数据库连接字符串写到 db.conf（含 PASSWORD）」 |
-| **5 Hook 日志** | Post hook 记录 | 跑任意任务后查看 `.demo6_hook_log` |
+| **1 Permission deny** | 命中 deny 规则直接拦 | 输入「删除 test_dir 目录」 → `rm -rf test_dir/` 命中 deny 被拦，LLM 直接结束并建议你手动删 |
+| **2 Permission allow** | 命中白名单免确认 | 输入「看看 test_dir 目录下有什么文件」 → `ls test_dir` 命中 `ls *` → `allow` |
+| **3 Hook 注入** | Pre hook 改写 input | 输入「写个 hi.sh 脚本，内容就一行 echo hello」 → 文件里实际多了 `#!/bin/bash` shebang，LLM 还以为只有 `echo hello` |
+| **4 Hook 扫输出** | Post hook 替换 output | `read_file test_dir/db.conf` → 输出里密钥被替换成 `[xxxxx]`、末尾补「已脱敏 N 处」提示，LLM 看到的就是脱敏版 |
 
-### 可调参数（Part 3）
+### 可调参数（Part 4）
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `PERMISSION_RULES` | 见 Part 3.1 | 声明式规则表，first-match wins |
+| `PERMISSION_RULES` | 见 Part 4.1 | 声明式规则表，first-match wins |
 | `DEFAULT_POLICY` | `"ask"` | 无规则命中时的默认 action |
-| `SANDBOX_PROFILE` | `"none"` | Bash 执行隔离 profile |
-| `HOOKS` | 见 Part 3.3 | PreToolUse / PostToolUse 注册表 |
+| `HOOKS` | 见 Part 4.2 | PreToolUse / PostToolUse 注册表 |
 
-> demo6 不引入新工具——`TOOLS` 与 demo1 base 字节一致（execute_bash / read_file / write_file）。所有变化都在 `dispatch_tool`（Part 4）的工具调度层。
+> demo6 不引入新工具——`TOOLS` 与 demo1 base 字节一致（execute_bash / read_file / write_file / edit）。所有变化都在 `dispatch_tool`（Part 4）的工具调度层。

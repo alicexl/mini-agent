@@ -150,8 +150,6 @@ TOOLS = [
     },
 ]
 
-SYSTEM_PROMPT = """你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"""
-
 
 # ============================================================
 # Part 3: 工具实现 + 路由表
@@ -159,14 +157,13 @@ SYSTEM_PROMPT = """你是一个有用的助手，可以通过工具与系统交�
 # 每个工具是一个普通 Python 函数：
 #   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
 #   - 设置超时，防止死循环或长时间阻塞
-#   - shell=True 让命令拥有更强能力（风险换能力）
 
 def execute_bash(command: str) -> str:
     """执行 shell 命令"""
     try:
         result = subprocess.run(
             command,
-            shell=True,            # 让命令拥有更强能力
+            shell=True,
             capture_output=True,
             encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
             errors="replace",
@@ -301,6 +298,7 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
         Agent 的最终文本回复
     """
     messages = [{"role": "user", "content": user_input}]
+    system_prompt = "你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"
 
     for loop_idx in range(1, MAX_ITERATIONS + 1):
         if verbose:
@@ -313,7 +311,7 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
         response = client.messages.create(
             model=MODEL,
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             tools=TOOLS,
             messages=messages,
         )

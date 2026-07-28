@@ -3,7 +3,7 @@
 """
 Demo3-tools - 工具扩展轴的 Agent
 
-公式：demo3 = base × MCP
+公式：demo3 = base × 工具扩展
 
 在 demo1-react（base）基础上叠加 MCP 协议——跨进程工具协议，
 JSON-RPC 2.0 + HTTP Transport，工具可跨语言、跨机器复用。
@@ -98,8 +98,7 @@ def init_client() -> None:
 # 每次请求随 tools 参数一起发给大模型，相当于一份「工具说明书」。
 # 大模型拿到说明书后就知道自己有哪些本地能力，但真正的执行发生在本地代码里。
 #
-# demo1 的工具保留不变。
-# demo3 在此基础上**新增 1 个本地工具 edit** —— 精细修改（string replacement）。
+# demo1 的 4 个工具保留不变（含 edit）；demo3 新增的是 MCP 协议（见 Part 4）。
 
 TOOLS = [
     {
@@ -146,8 +145,7 @@ TOOLS = [
         "name": "edit",
         "description": (
             "精确替换文件中的一段文本（string replacement）。"
-            "比 write_file 整文件覆写更精细，适合改一行 / 改一个标识符 / 改一个值。"
-            "若 old 在文件中出现多次，默认只替换第一处；replace_all=true 替换全部。"
+            "比 write_file 整文件覆写更精细，适合改一行 / 改一个值。"
         ),
         "input_schema": {
             "type": "object",
@@ -162,8 +160,6 @@ TOOLS = [
     },
 ]
 
-SYSTEM_PROMPT = """你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"""
-
 
 # ============================================================
 # Part 3: 本地工具实现 + 路由表
@@ -171,14 +167,13 @@ SYSTEM_PROMPT = """你是一个有用的助手，可以通过工具与系统交�
 # 每个工具是一个普通 Python 函数：
 #   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
 #   - 设置超时，防止死循环或长时间阻塞
-#   - shell=True 让命令拥有更强能力（风险换能力）
 
 def execute_bash(command: str) -> str:
     """执行 shell 命令"""
     try:
         result = subprocess.run(
             command,
-            shell=True,            # 让命令拥有更强能力
+            shell=True,
             capture_output=True,
             encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
             errors="replace",
@@ -229,7 +224,7 @@ def write_file(path: str, content: str) -> str:
 
 
 def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
-    """精确替换文件中的文本。"""
+    """精确替换文件中的文本。
 
     与 write_file 的核心区别：
         - write_file：发整文件内容 → 重写整文件
@@ -425,6 +420,7 @@ def run_agent(
 ) -> str:
     """ReAct 主循环（同 demo1，工具集扩展为本地 + MCP）。"""
     messages = [{"role": "user", "content": user_input}]
+    system_prompt = "你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"
 
     for loop_idx in range(1, MAX_ITERATIONS + 1):
         if verbose:
@@ -434,7 +430,7 @@ def run_agent(
         response = client.messages.create(
             model=MODEL,
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             tools=all_tools,
             messages=messages,
         )

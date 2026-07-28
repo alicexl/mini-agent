@@ -133,14 +133,17 @@ TOOLS = [
     },
     {
         "name": "edit",
-        "description": "精确替换文件中的一段文本。比 write_file 整文件覆写更精细。",
+        "description": (
+            "精确替换文件中的一段文本（string replacement）。"
+            "比 write_file 整文件覆写更精细，适合改一行 / 改一个值。"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "path":        {"type": "string",  "description": "要编辑的文件路径"},
-                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配）"},
+                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配，含空格/缩进）"},
                 "new":         {"type": "string",  "description": "替换为的新文本"},
-                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false）"},
+                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false，只替换第一处）"},
             },
             "required": ["path", "old", "new"],
         },
@@ -196,14 +199,13 @@ TOOLS = [
 # 每个工具是一个普通 Python 函数：
 #   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
 #   - 设置超时，防止死循环或长时间阻塞
-#   - shell=True 让命令拥有更强能力（风险换能力）
 
 def execute_bash(command: str) -> str:
     """执行 shell 命令"""
     try:
         result = subprocess.run(
             command,
-            shell=True,            # 让命令拥有更强能力
+            shell=True,
             capture_output=True,
             encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
             errors="replace",

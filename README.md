@@ -10,7 +10,7 @@
 |---|---|---|---|
 | [demo1-react](demo1-react) | 循环 | `LLM × 工具 × 循环 × 状态` | Agent 最小心跳——ReAct 循环跑通（base） |
 | [demo2-memory](demo2-memory) | 记忆 | `base × 记忆` | 任务结束就忘；多轮 ReAct 把 messages 撑爆上下文 |
-| [demo3-tools](demo3-tools) | 工具 | `base × 工具` | 本地工具有限；想接外部协议 |
+| [demo3-tools](demo3-tools) | 工具 | `base × 工具扩展` | 本地工具有限；想接外部协议 |
 | [demo4-plan](demo4-plan) | 规划 | `base × 规划` | 走一步看一步容易跑偏；常见任务每次重新想 |
 | [demo5-multiagent](demo5-multiagent) | 多 Agent | `base × 多 Agent` | 单 Agent 上下文膨胀；不能外包/协作独立子任务 |
 | [demo6-safety](demo6-safety) | 约束 | `base × 约束` | 工具太自由（`rm -rf /`），安全逻辑硬编码不可配置 |
@@ -35,7 +35,7 @@ python agent.py
 
 每个 demo 目录下有：
 - **`讲稿.md`** — 完整教学讲稿（口播 + 屏显 + 真实运行日志，配合视频讲解）
-- **`agent.py`** — 单文件实现（200-600 行，可直接 `python agent.py` 跑通）
+- **`agent.py`** — 单文件实现（约 400-720 行，可直接 `python agent.py` 跑通）
 - **`README.md`** — 精简的设计方案 + 运行说明
 
 ## 学习路径

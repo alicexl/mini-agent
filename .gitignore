@@ -8,6 +8,7 @@ __pycache__/
 **/todos.md
 **/agent_memory.md
 **/.demo6_hook_log
+demo6-safety/db.conf
 **/test_dir/
 **/weather.txt
 demo4-plan/_trace_*.txt
