@@ -207,6 +207,7 @@ demo6: = base × 约束
 | **并发工具调用** | 循环 | `parallel_tool_use=true`，LLM 一次 turn 可以并行调多个独立工具（如同时 read_file 三个文件） |
 | **Token 级压缩触发** | 记忆 | compact 不按条数触发，按上下文窗口占比（如 80%）触发，更精确 |
 | **向量记忆** | 记忆 | Chroma / Pinecone 语义检索 top-K，比文件全量加载更省 token |
+| **仓库地图**（repo map） | 工具 | tree-sitter 解析全仓 → PageRank 排名选重要符号 → 压进 ~1k token 的折叠地图（Aider），让 LLM 不读全文掌握代码结构 |
 | **执行环境隔离** | 约束 | firejail / Docker / microVM（Firecracker）——Control Plane 之外的 Execution Environment 层 |
 | **可观测性** | 循环 | Token 消耗追踪、cost tracker、`--debug` 模式、进度条/spinner |
 
