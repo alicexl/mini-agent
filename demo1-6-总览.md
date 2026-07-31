@@ -49,7 +49,6 @@
 | **长期记忆**（落盘文件） | demo2 | `agent_memory.md`，跨任务持久化 |
 | **上下文压缩** | demo2 | `compact_messages` 滚动摘要，防 messages 撑爆 |
 | **Prompt caching** | demo2 | `cache_control` breakpoint + 5/60min TTL，长 prompt 不爆成本 |
-| **本地工具扩展** | demo3 | edit（string replacement）/ glob / grep——比 read+write 整文件覆盖更精细 |
 | **MCP**（外部工具协议） | demo3 | client-server + JSON-RPC 风格 round-trip，挂外部 server |
 | **Plan 模式**（手动 + 自动） | demo4 | 手动开 plan 模式 / LLM 自动决策 plan 与否；TodoWrite 风格 step 列表 |
 | **Skill** | demo4 | SKILL.md 预消化的工作流，description 匹配后注入 prompt |
@@ -67,7 +66,7 @@
 ```
 demo1  base = LLM × 工具 × 循环 × 状态
 demo2  = base × 记忆            （短期 messages + 长期文件 + compact + caching）
-demo3  = base × 工具扩展        （本地扩展 edit/glob/grep + MCP 外部协议）
+demo3  = base × 工具扩展        （MCP 外部工具协议）
 demo4  = base × 规划            （手动 Plan + 自动 Plan + Skill 预消化）
 demo5  = base × 多 Agent        （Subagent 一次性 + Team 持久 + 消息队列）
 demo6  = base × 约束            （Permission 规则 + Hook 回调）
