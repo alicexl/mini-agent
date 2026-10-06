@@ -50,6 +50,8 @@ export ANTHROPIC_API_KEY=你的智谱Key    # Key 格式 id.secret，在 bigmode
 
 未设环境变量直接运行，会提示输入（不持久化，每次运行都要重输）。
 
+> 另有 `USE_THINKING` 开关（`agent.py` / `agent_single.py` 顶部，默认关闭）——开启后模型每轮先推理再决策，思考过程以 `✻ thinking`（暗灰色）随回复展示；思考预算计入 `max_tokens`，开启时输出上限自动抬到 8000。
+
 ### 启动 Agent
 
 ```bash

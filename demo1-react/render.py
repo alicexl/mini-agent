@@ -23,7 +23,7 @@ from rich.rule import Rule
 # 全仓共享一个 Console（rich 的输出宽度 / 编码探测都挂在它身上）
 console = Console()
 
-# step 前缀图标 + 配色（thinking 为未来开启 thinking 参数预留，当前模型不返回该块）
+# step 前缀图标 + 配色（thinking 仅在 USE_THINKING=True 时出现）
 _STYLES = {
     "thinking":    ("✻", "dim"),
     "assistant":   ("●", "green"),

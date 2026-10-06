@@ -46,6 +46,10 @@ BASE_URL       = "https://open.bigmodel.cn/api/anthropic"   # 智谱 BigModel An
 MODEL          = "glm-5.2"                                  # 模型名
 API_TIMEOUT_MS = 3000000                                    # 单次请求超时（毫秒），3000000ms = 50 分钟
 
+# 思考模式开关（默认关闭）：开启后模型每轮先推理再决策，✻ thinking 随回复展示
+USE_THINKING           = False
+THINKING_BUDGET_TOKENS = 2000   # 思考预算（计入 max_tokens，开启时输出上限抬到 8000）
+
 
 def load_config() -> dict:
     """API Key 只从环境变量读（不存在代码内常量）"""
@@ -130,18 +134,24 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
             print_messages(messages)
 
         # ---- 决策：大模型思考下一步 ----
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=4096,
-            system=system_prompt,
-            tools=TOOLS,
-            messages=messages,
-        )
+        create_kwargs = {
+            "model": MODEL,
+            # 思考预算计入 max_tokens，开启 thinking 时须抬高输出上限
+            "max_tokens": 8000 if USE_THINKING else 4096,
+            "system": system_prompt,
+            "tools": TOOLS,
+            "messages": messages,
+        }
+        if USE_THINKING:
+            create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET_TOKENS}
+        response = client.messages.create(**create_kwargs)
 
         if verbose:
             print_stop_reason(response.stop_reason)
             for block in response.content:
-                if block.type == "text":
+                if block.type == "thinking":
+                    print_step("thinking", block.thinking, limit=80)
+                elif block.type == "text":
                     print_step("assistant", block.text, limit=80)
                 elif block.type == "tool_use":
                     print_step("tool_call", f"{block.name}({block.input})")
