@@ -299,7 +299,10 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
         Agent 的最终文本回复
     """
     messages = [{"role": "user", "content": user_input}]
-    system_prompt = "你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"
+    system_prompt = (
+        "你是一个有用的助手，可以通过工具读写文件、执行命令，帮用户完成任务。"
+        "工作流程：先理解需求，再动手实现，实现完后必须运行验证。"
+    )
 
     for loop_idx in range(1, MAX_ITERATIONS + 1):
         if verbose:
