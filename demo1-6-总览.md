@@ -154,7 +154,7 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 
 > 每个目录下还有一份 `README.md`——精简的**设计方案 + 运行说明**（安装/配置/启动命令），深度讲解看 `讲稿.md`。
 
-> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 schema / Part 3 工具实现 / Part 4 ReAct 主循环）。demo1 正式版已先行拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层，rich + prompt_toolkit），demo2-6 迁移到该结构前暂保持单文件。
+> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环；demo2-6 迁移前各自内部的 Part 细分略有不同）。demo1 正式版已先行拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层，rich + prompt_toolkit），demo2-6 迁移到该结构前暂保持单文件。
 
 ### demo5 的特殊结构
 
@@ -190,7 +190,7 @@ demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以�
 
 每个 demo 都有"真实运行回显"——`讲稿.md` 里贴了实测日志（不是虚构），直接看：
 
-- demo1 §4 — 统计 .py 文件数 + 写 count.txt（3 轮 ReAct）
+- demo1 §3 — 统计 .py 文件数 + 写 count.txt（3 轮 ReAct）
 - demo2 §5 — 案例 1（统计 .py 文件，3 轮 ReAct + caching 命中）+ 案例 2（5 步串行任务，7 轮 ReAct + compact 触发）
 - demo3 §7 — MCP 远程调用 + edit 精细修改对照
 - demo4 §6 — Plan 自动决策 + Skill 匹配触发

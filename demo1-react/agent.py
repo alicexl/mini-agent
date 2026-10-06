@@ -5,7 +5,7 @@ Demo1 - 正式版（三文件结构）
 
 演示 Agent 的底层原理 = LLM (大脑) + 工具 (手脚) + 循环 (ReAct)
 
-    agent.py    主入口：客户端初始化 + ReAct 主循环 + 交互式 REPL（本文件）
+    agent.py    主入口：客户端初始化 + ReAct 主循环（本文件）
     tools.py    工具层：工具 schema + 实现 + 路由表
     render.py   渲染层：rich 分色输出 + prompt_toolkit 输入
 

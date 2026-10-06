@@ -3,7 +3,7 @@
 """
 Demo1 工具层 — 工具定义 + 工具实现 + 路由表
 
-从 agent_single.py 拆出（原 Part 2 + Part 3，逻辑零改动）。
+从 agent_single.py 拆出（原 Part 2「工具」整块，逻辑零改动）。
 拆分动机：工具是独立资产——主循环只认识两样东西：
     TOOLS               发给大模型的「工具说明书」
     AVAILABLE_FUNCTIONS 本地调度的路由表（工具名 → 函数）
