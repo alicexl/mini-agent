@@ -44,7 +44,7 @@ python agent.py
 
 每个 demo 目录下有：
 - **`讲稿.md`** — 完整教学讲稿（口播 + 屏显 + 真实运行日志，配合视频讲解）
-- **`agent.py`** — 单文件实现（约 400-720 行，可直接 `python agent.py` 跑通）
+- **`agent.py`** — 入口实现（约 400-720 行，可直接 `python agent.py` 跑通；demo1 已拆分为 `agent.py` + `tools.py` + `render.py` 三文件，另保留 `agent_single.py` 原始单文件版）
 - **`README.md`** — 精简的设计方案 + 运行说明
 
 ## 学习路径

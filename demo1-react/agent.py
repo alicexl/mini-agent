@@ -1,33 +1,45 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Demo1 - 最简 Agent 实现
+Demo1 - 正式版（三文件结构）
 
 演示 Agent 的底层原理 = LLM (大脑) + 工具 (手脚) + 循环 (ReAct)
 
-单文件按 4 部分组织（对应教学音频的「全局架构」章节）：
-    Part 1: LLM 客户端初始化
-    Part 2: 工具定义（execute_bash / read_file / write_file / edit）
-    Part 3: 工具实现 + 路由表（调度核心）
-    Part 4: Agent 主循环（决策 / 行动 / 感知 = ReAct）
+    agent.py    主入口：客户端初始化 + ReAct 主循环 + 交互式 REPL（本文件）
+    tools.py    工具层：工具 schema + 实现 + 路由表
+    render.py   渲染层：rich 分色输出 + prompt_toolkit 输入
+
+原始单文件版保留在 agent_single.py（教学起点——「一切始于单文件」）。
+本文件由它拆分而来，功能完全一致；拆分动机：
+    1. 工具是独立资产——加工具只动 tools.py，主循环不关心实现细节
+    2. UI 收敛一处——换终端渲染方案（如调配色、换库）只动 render.py
+    3. 主循环只剩 ReAct 骨架——读 agent.py 就是在读「循环」本身
 """
 
 import os
-import subprocess
 
 from anthropic import Anthropic
+
+from tools import TOOLS, AVAILABLE_FUNCTIONS
+from render import (
+    print_banner,
+    print_divider,
+    print_error,
+    print_markdown,
+    print_messages,
+    print_stop_reason,
+    print_step,
+    read_user_input,
+)
 
 
 # ============================================================
 # Part 1: 配置 + LLM 客户端初始化
 # ============================================================
-# 网关、模型、超时均写死，用户只需配置 API Key（两种方式）：
-#   1. 直接修改下面的 API_KEY
-#   2. 都没设 → 运行时交互式提示输入（不持久化，每次都要重输）
+# 网关、模型、超时均写死。API Key 两种获取方式（按优先级）：
+#   1. 环境变量 ANTHROPIC_API_KEY（优先级最高，可持久化）
+#   2. 未设环境变量 → 运行时交互式提示输入（仅本次有效，不持久化）
 # 默认走智谱 BigModel 的 Anthropic 兼容网关 + glm-5.2 模型。
-
-# ↓↓↓ 只需改这一行 ↓↓↓
-API_KEY = ""
 
 # 默认配置（一般无需修改）
 BASE_URL       = "https://open.bigmodel.cn/api/anthropic"   # 智谱 BigModel Anthropic 兼容网关
@@ -36,9 +48,9 @@ API_TIMEOUT_MS = 3000000                                    # 单次请求超时
 
 
 def load_config() -> dict:
-    """环境变量优先于代码默认值（仅 API_KEY 走环境变量有用）"""
+    """API Key 只从环境变量读（不存在代码内常量）"""
     return {
-        "api_key":       os.environ.get("ANTHROPIC_API_KEY") or API_KEY,
+        "api_key":       os.environ.get("ANTHROPIC_API_KEY") or "",
         "base_url":      BASE_URL,
         "model":         MODEL,
         "timeout_ms":    API_TIMEOUT_MS,
@@ -56,7 +68,7 @@ def ensure_config() -> dict:
 
     print("=" * 60)
     print("检测到尚未配置 API Key，请输入（仅本次运行有效）")
-    print("如需持久化：请改 agent.py 顶部的 API_KEY 变量")
+    print("如需持久化：请设置环境变量 ANTHROPIC_API_KEY")
     print("=" * 60)
 
     api_key = input("\n请输入 API Key: ").strip()
@@ -85,205 +97,14 @@ def init_client() -> None:
 
 
 # ============================================================
-# Part 2: 工具定义（Function Calling 标准格式）
-# ============================================================
-# 每次请求随 tools 参数一起发给大模型，相当于一份「工具说明书」。
-# 大模型拿到说明书后就知道自己有哪些本地能力，但真正的执行发生在本地代码里。
-
-TOOLS = [
-    {
-        "name": "execute_bash",
-        "description": "执行任意 shell 命令，可用于文件操作、系统命令等",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "要执行的 shell 命令",
-                }
-            },
-            "required": ["command"],
-        },
-    },
-    {
-        "name": "read_file",
-        "description": "读取指定路径文件内容，返回文本",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "要读取的文件路径",
-                }
-            },
-            "required": ["path"],
-        },
-    },
-    {
-        "name": "write_file",
-        "description": "写入文件，不存在则创建，存在则覆盖",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "要写入的文件路径"},
-                "content": {"type": "string", "description": "要写入的内容"},
-            },
-            "required": ["path", "content"],
-        },
-    },
-    {
-        "name": "edit",
-        "description": (
-            "精确替换文件中的一段文本（string replacement）。"
-            "比 write_file 整文件覆写更精细，适合改一行 / 改一个值。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path":        {"type": "string",  "description": "要编辑的文件路径"},
-                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配，含空格/缩进）"},
-                "new":         {"type": "string",  "description": "替换为的新文本"},
-                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false，只替换第一处）"},
-            },
-            "required": ["path", "old", "new"],
-        },
-    },
-]
-
-
-# ============================================================
-# Part 3: 工具实现 + 路由表
-# ============================================================
-# 每个工具是一个普通 Python 函数：
-#   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
-#   - 设置超时，防止死循环或长时间阻塞
-
-def execute_bash(command: str) -> str:
-    """执行 shell 命令"""
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
-            errors="replace",
-            timeout=60,            # 防止死循环 / 长时间阻塞
-        )
-        output = []
-        if result.stdout:
-            output.append(result.stdout)
-        if result.stderr:
-            output.append(f"[stderr] {result.stderr}")
-        if result.returncode != 0:
-            output.append(f"[exit code: {result.returncode}]")
-        return "\n".join(output) if output else "[命令执行成功，无输出]"
-    except subprocess.TimeoutExpired:
-        return "[错误] 命令执行超时（60 秒）"
-    except Exception as e:
-        return f"[错误] 命令执行失败: {e}"
-
-
-def read_file(path: str) -> str:
-    """读取文件内容"""
-    try:
-        if not os.path.exists(path):
-            return f"[错误] 文件不存在: {path}"
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        max_length = 20000
-        if len(content) > max_length:
-            content = content[:max_length] + f"\n\n... [内容已截断，共 {len(content)} 字符]"
-        return content
-    except UnicodeDecodeError:
-        return "[错误] 文件不是有效的文本文件或编码不支持"
-    except Exception as e:
-        return f"[错误] 读取文件失败: {e}"
-
-
-def write_file(path: str, content: str) -> str:
-    """写入文件"""
-    try:
-        dir_path = os.path.dirname(path)
-        if dir_path and not os.path.exists(dir_path):
-            os.makedirs(dir_path, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        return f"[成功] 文件已写入: {path} ({len(content)} 字符)"
-    except Exception as e:
-        return f"[错误] 写入文件失败: {e}"
-
-
-def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
-    """精确替换文件中的文本"""
-    try:
-        if not os.path.exists(path):
-            return f"[错误] 文件不存在: {path}"
-        if not old:
-            return "[错误] old 不能为空"
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        occurrences = content.count(old)
-        if occurrences == 0:
-            return f"[错误] 未找到匹配文本，请用 read_file 确认精确内容"
-        new_content = content.replace(old, new) if replace_all else content.replace(old, new, 1)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-        which = f"全部 {occurrences} 处" if replace_all else f"第 1 处（共 {occurrences} 处）"
-        return f"[成功] {path} 替换 {which}"
-    except Exception as e:
-        return f"[错误] 编辑文件失败: {e}"
-
-
-# 路由表：工具名 → 实际函数（调度核心）
-# 当大模型说「我要调用 execute_bash」时，Agent 通过这张表把名字映射到具体函数并执行。
-AVAILABLE_FUNCTIONS = {
-    "execute_bash": execute_bash,
-    "read_file":    read_file,
-    "write_file":   write_file,
-    "edit":         edit,
-}
-
-
-# ============================================================
-# Part 4: Agent 主循环（决策 / 行动 / 感知 = ReAct）
+# Part 2: Agent 主循环（决策 / 行动 / 感知 = ReAct）
 # ============================================================
 # 每一轮：把整个 messages 重新发给大模型 → 大模型决策是否调用工具
 #       → 调用就执行工具并把结果追加回 messages → 再发给大模型
 #       → 直到 stop_reason != "tool_use"（任务完成）或达到 MAX_ITERATIONS。
+# 与 agent_single.py 的差异只在输出：print 全部换成 render.py 的分色步骤。
 
 MAX_ITERATIONS = 30  # 防止大模型陷入死循环
-
-
-def _preview(text: str, limit: int = 60) -> str:
-    """截取字符串预览，超长加省略号"""
-    text = str(text).replace("\n", " ").strip()
-    return text[:limit] + ("..." if len(text) > limit else "")
-
-
-def _print_messages(messages: list) -> None:
-    """调试打印——只是给人看的预览。"""
-    print(f"[messages] 当前 {len(messages)} 条消息")
-    for i, msg in enumerate(messages):
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            parts = []
-            for block in content:
-                if isinstance(block, dict):
-                    if block.get("type") == "text":
-                        parts.append(block.get("text", ""))
-                    elif block.get("type") == "tool_use":
-                        parts.append(f"[调用工具 {block.get('name')}]")
-                    elif block.get("type") == "tool_result":
-                        parts.append(str(block.get("content", ""))[:100])
-                else:
-                    t = getattr(block, "type", None)
-                    if t == "text":
-                        parts.append(getattr(block, "text", ""))
-                    elif t == "tool_use":
-                        parts.append(f"[调用工具 {getattr(block, 'name', '')}]")
-            content = "\n".join(parts)
-        print(f"  [{i}] {msg.get('role', '?'):<9}: {_preview(content)}")
-    print()
 
 
 def run_agent(user_input: str, verbose: bool = True) -> str:
@@ -302,10 +123,8 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
 
     for loop_idx in range(1, MAX_ITERATIONS + 1):
         if verbose:
-            print(f"\n{'=' * 60}")
-            print(f"第 {loop_idx} 轮 ReAct 循环")
-            print(f"{'=' * 60}")
-            _print_messages(messages)
+            print_divider(f"第 {loop_idx} 轮 ReAct")
+            print_messages(messages)
 
         # ---- 决策：大模型思考下一步 ----
         response = client.messages.create(
@@ -317,18 +136,17 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
         )
 
         if verbose:
-            print(f"\n[LLM 决策] stop_reason = {response.stop_reason}")
+            print_stop_reason(response.stop_reason)
             for block in response.content:
                 if block.type == "text":
-                    preview = block.text[:80] + ("..." if len(block.text) > 80 else "")
-                    print(f"  - text      : {preview}")
+                    print_step("assistant", block.text, limit=80)
                 elif block.type == "tool_use":
-                    print(f"  - tool_use  : {block.name}({block.input})")
+                    print_step("tool_call", f"{block.name}({block.input})")
 
         # ---- 判断是否结束 ----
         if response.stop_reason != "tool_use":
             if verbose:
-                print(f"\n[循环结束] 大模型判断任务完成，退出循环")
+                print_divider("任务完成")
             return "".join(b.text for b in response.content if b.type == "text")
 
         # ---- 行动：本地执行工具 + 感知：收集结果 ----
@@ -344,18 +162,13 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
             if fn is None:
                 result = f"[错误] 未知工具: {name}"
             else:
-                if verbose:
-                    print(f"\n[执行工具] {name}({args})")
                 try:
                     result = str(fn(**args))
                 except Exception as e:
                     result = f"[错误] 工具 {name} 执行失败: {e}"
 
             if verbose:
-                preview = str(result)[:200] + (
-                    "..." if len(str(result)) > 200 else ""
-                )
-                print(f"[工具结果] {preview}")
+                print_step("tool_return", result, limit=200)
 
             tool_results.append({
                 "type": "tool_result",
@@ -372,26 +185,23 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
 # ============================================================
 # 交互式入口：真实 Agent 演示
 # ============================================================
-# 改好上面的 API_KEY 后直接运行，
+# 设置好环境变量 ANTHROPIC_API_KEY 后直接运行（未设则启动时交互式输入），
 # 在终端输入任意任务（统计文件、查信息、写脚本……），观察每一轮 ReAct 循环。
 # 输入 quit / exit / q 退出。
 
 if __name__ == "__main__":
-    # 未配置 API Key 时会交互式提示输入
     init_client()
 
-    print("=" * 60)
-    print("Demo1 Agent 已启动")
-    print(f"模型:   {MODEL}")
-    print(f"网关:   {BASE_URL}")
-    print("输入 quit / exit 退出")
-    print("=" * 60)
+    print_banner("Demo1 Agent 已启动", [
+        f"模型:   {MODEL}",
+        f"网关:   {BASE_URL}",
+        "输入 quit / exit 退出",
+    ])
 
     while True:
-        try:
-            user_input = input("\n用户: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print("\n再见！")
+        user_input = read_user_input()
+        if user_input is None:
+            print("再见！")
             break
 
         if not user_input:
@@ -402,6 +212,6 @@ if __name__ == "__main__":
 
         try:
             final = run_agent(user_input, verbose=True)
-            print(f"\n助手: {final}")
+            print_markdown(final)
         except Exception as e:
-            print(f"\n[错误] {e}")
+            print_error(f"[错误] {e}")

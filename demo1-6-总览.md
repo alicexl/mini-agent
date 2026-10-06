@@ -145,7 +145,7 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 
 | Demo | 入口 | 核心新增文件 | 讲稿 |
 |---|---|---|---|
-| demo1 | `demo1-react/agent.py` | — | `demo1-react/讲稿.md` |
+| demo1 | `demo1-react/agent.py`（+ `agent_single.py` 原始单文件版；拆出 `tools.py` / `render.py`） | — | `demo1-react/讲稿.md` |
 | demo2 | `demo2-memory/agent.py` | `agent_memory.md`（运行时生成） | `demo2-memory/讲稿.md` |
 | demo3 | `demo3-tools/agent.py` + `demo3-tools/mcp_server.py` | — | `demo3-tools/讲稿.md` |
 | **demo4** | `demo4-plan/agent.py` | `skills/review.md`（示例 Skill——代码审查工作流） | `demo4-plan/讲稿.md` |
@@ -154,7 +154,7 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 
 > 每个目录下还有一份 `README.md`——精简的**设计方案 + 运行说明**（安装/配置/启动命令），深度讲解看 `讲稿.md`。
 
-> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的 4 个 Part 扩展而来（Part 1 LLM 客户端 / Part 2 工具 schema / Part 3 工具实现 / Part 4 ReAct 主循环）。
+> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 schema / Part 3 工具实现 / Part 4 ReAct 主循环）。demo1 正式版已先行拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层，rich + prompt_toolkit），demo2-6 迁移到该结构前暂保持单文件。
 
 ### demo5 的特殊结构
 
@@ -219,9 +219,11 @@ demo6: = base × 约束
 ## 七、运行环境
 
 - Python 3.9+
-- 依赖：`anthropic` SDK（兼容网关）+ `requests`（demo3 MCP Client）
+- 依赖：`anthropic` SDK（兼容网关）+ `rich` / `prompt_toolkit`（demo1 渲染层）+ `requests`（demo3 MCP Client）
 - **网关 / 模型**：所有 demo 默认走**智谱 BigModel 的 Anthropic 兼容网关**（`https://open.bigmodel.cn/api/anthropic`）+ `glm-5.2` 模型——接口与 Anthropic SDK 完全兼容，换官方 API 或别的兼容网关只需改 `BASE_URL` / `MODEL`
-- **API Key 三级回退**（实际优先级：env 覆盖代码变量，代码是 `os.environ.get("ANTHROPIC_API_KEY") or API_KEY`）：
+- **API Key 配置**：
+  - **demo1（已拆分重构）——两级回退**：环境变量 `ANTHROPIC_API_KEY` → 运行时交互式输入（代码内不再有 `API_KEY` 常量）
+  - **demo2-6（待迁移单文件版）——三级回退**：
   1. 设环境变量 `ANTHROPIC_API_KEY`（优先级最高）
   2. 改 `agent.py` Part 1 顶部的 `API_KEY = ""`（持久化；env 未设时才生效）
   3. 都没设 → 首次运行时交互式输入（仅本次有效）
