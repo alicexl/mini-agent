@@ -9,7 +9,7 @@
   1. 先说结论
   2. 全局架构与逐层解读
   3. 示例解读循环的运行时序
-  4. 工程化拆分：tools 与 render
+  4. 工程化拆分：tools、render 与 commands
   5. 总结和展望
 
 概念讲解、设计原理、演进方向全部在讲稿里。本 README 只讲**怎么跑起来**。
@@ -22,6 +22,7 @@
 | `agent.py` | 正式版主入口：客户端初始化 + ReAct 主循环 |
 | `tools.py` | 工具层：工具 schema + 4 个工具实现 + 路由表（从原 Part 2「工具」拆出） |
 | `render.py` | 渲染层：rich 分色输出 + prompt_toolkit 输入（从原散落 print 拆出） |
+| `commands.py` | 命令层：`/help` `/status` `/exit` 斜杠命令 |
 | `讲稿.md` | 教学讲稿 |
 | `requirements.txt` | 依赖清单（`anthropic` + `rich` + `prompt_toolkit`） |
 
@@ -58,8 +59,8 @@ python -X utf8 agent.py           # 正式版（三文件结构，rich 渲染）
 python -X utf8 agent_single.py    # 原始单文件版（纯 print，零渲染依赖）
 ```
 
-进入交互模式后，输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」、「读 README.md 并总结要点」等），观察每一轮 ReAct 循环的决策、行动、感知。输入 `quit` / `exit` 退出。
+进入交互模式后，输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」、「读 README.md 并总结要点」等），观察每一轮 ReAct 循环的决策、行动、感知。斜杠命令：`/help` 可用命令 / `/status` 会话状态 / `/quit` 退出（命令纯斜杠；`agent_single.py` 原始版仍支持裸 `quit` / `q`）。
 
 > **注 1**：`verbose=True` 默认开启，打印每一轮的完整决策与工具调用，便于教学观察。
 >
-> **注 2**：`-X utf8` 防止 GBK Windows 控制台中文乱码；`render.py` 在管道（非终端）环境下自动降级——prompt_toolkit 输入退回内置 `input()`，rich 输出去掉颜色，`printf '任务\nquit\n' | python -X utf8 agent.py` 可自动跑。
+> **注 2**：`-X utf8` 防止 GBK Windows 控制台中文乱码；`render.py` 在管道（非终端）环境下自动降级——prompt_toolkit 输入退回内置 `input()`，rich 输出去掉颜色，`printf '任务\n/quit\n' | python -X utf8 agent.py` 可自动跑。

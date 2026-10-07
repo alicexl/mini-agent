@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Demo1 - 正式版（三文件结构）
+Demo1 - 正式版（四文件结构）
 
 演示 Agent 的底层原理 = LLM (大脑) + 工具 (手脚) + 循环 (ReAct)
 
-    agent.py    主入口：客户端初始化 + ReAct 主循环（本文件）
-    tools.py    工具层：工具 schema + 实现 + 路由表
-    render.py   渲染层：rich 分色输出 + prompt_toolkit 输入
+    agent.py     主入口：客户端初始化 + ReAct 主循环（本文件）
+    tools.py     工具层：工具 schema + 实现 + 路由表
+    render.py    渲染层：rich 分色输出 + prompt_toolkit 输入
+    commands.py  命令层：/help /status /exit 斜杠命令
 
 原始单文件版保留在 agent_single.py（教学起点——「一切始于单文件」）。
 本文件由它拆分而来，功能完全一致；拆分动机：
@@ -31,6 +32,7 @@ from render import (
     print_step,
     read_user_input,
 )
+from commands import SessionState, handle_command
 
 
 # ============================================================
@@ -200,15 +202,16 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
 # ============================================================
 # 设置好环境变量 ANTHROPIC_API_KEY 后直接运行（未设则启动时交互式输入），
 # 在终端输入任意任务（统计文件、查信息、写脚本……），观察每一轮 ReAct 循环。
-# 输入 quit / exit / q 退出。
+# 命令纯斜杠：/help 查看命令、/quit 退出（裸词退出仅原始单文件版保留）。
 
 if __name__ == "__main__":
     init_client()
 
+    state = SessionState(model=MODEL, base_url=BASE_URL)
     print_banner("Demo1 Agent 已启动", [
         f"模型:   {MODEL}",
         f"网关:   {BASE_URL}",
-        "输入 quit / exit 退出",
+        "命令:   /help 查看命令，/quit 退出",
     ])
 
     while True:
@@ -219,12 +222,16 @@ if __name__ == "__main__":
 
         if not user_input:
             continue
-        if user_input.lower() in {"quit", "exit", "q"}:
-            print("再见！")
+
+        action = handle_command(user_input, state)
+        if action == "break":
             break
+        if action == "continue":
+            continue
 
         try:
             final = run_agent(user_input, verbose=True)
+            state.tasks_done += 1
             print_markdown(final)
         except Exception as e:
             print_error(f"[错误] {e}")
