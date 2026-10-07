@@ -14,16 +14,22 @@
   5. 示例解读：长任务实测（compact 触发 + caching 命中）
   6. 局限与工业级演进
 
+> 讲稿按重构前的单文件版撰写（6 个 Part），代码已迁移到五文件结构——`Part 4/5`（记忆+上下文管理）现为 `memory.py`，讲稿更新待做。
+
 概念讲解、设计原理、演进方向全部在讲稿里。本 README 只讲**怎么跑起来**。
 
 ## 关键文件
 
 | 文件 | 说明 |
 |---|---|
-| `agent.py` | 单文件实现（6 个 Part：客户端 / 工具 / 工具实现 / 长期记忆 / 上下文管理 / 主循环） |
+| `agent.py` | 主入口：客户端 + ReAct 主循环（compact 触发 + cache 统计）+ REPL |
+| `tools.py` | 工具层（同 demo1：schema + 4 工具 + 路由表） |
+| `render.py` | 渲染层（demo1 版 + `print_cache_stats` 缓存命中统计） |
+| `memory.py` | **记忆层**：项目级记忆 + compact + caching（记忆轴机制与可调参数） |
+| `session.py` | **会话层**：`memory/<会话ID>.jsonl` 会话持久化 + `/resume` 恢复 |
+| `commands.py` | 命令层：`/help` `/status` `/memory` `/resume` `/new` `/exit` |
 | `讲稿.md` | 教学讲稿 |
-| `agent_memory.md` | 运行时生成的长期记忆文件（已 gitignore） |
-| `todo.md` | 讲稿示例跑出来的真实产物（保留作参考） |
+| `memory/` | 运行时生成的双层记忆目录（已 gitignore）：**项目级** `MEMORY.md`（模型策展的持久事实，跨会话加载进 system prompt——对齐 Claude Code 的 MEMORY.md）+ **会话级** `<会话ID>.jsonl`（完整 messages，`/resume` 恢复） |
 
 ## 运行
 
@@ -33,50 +39,50 @@
 pip install -r requirements.txt
 ```
 
-依赖清单见 `requirements.txt`（仅 `anthropic` SDK）。
+依赖：`anthropic` + `rich` + `prompt_toolkit`。
 
 ### 配置 API Key
 
-网关、模型、超时已在代码里写死，**只需配置 API Key**：
+网关、模型、超时已在代码里写死，**只需配置 API Key**（按优先级）：
 
-```python
-# agent.py Part 1
-API_KEY         = ""                                         # ← 只改这一行
-BASE_URL        = "https://open.bigmodel.cn/api/anthropic"   # 智谱 BigModel
-MODEL           = "glm-5.2"
-API_TIMEOUT_MS  = 3000000                                    # 50 分钟
+**方式 1：环境变量（推荐，可持久化）**
+
+```bash
+export ANTHROPIC_API_KEY=你的智谱Key    # Key 格式 id.secret，在 bigmodel.cn 生成
 ```
-
-**方式 1：改代码（最简单）**
-
-打开 `agent.py`，把 Part 1 顶部的 `API_KEY = ""` 改成你的 Key。
 
 **方式 2：运行时交互式提示**
 
-`API_KEY` 为空时直接运行 `python agent.py`，会提示输入（不持久化，每次运行都要重输）。
-
-> 也支持 `ANTHROPIC_API_KEY` 环境变量临时覆盖（优先级：环境变量 > 代码变量）。
+未设环境变量直接运行，会提示输入（不持久化，每次运行都要重输）。
 
 ### 启动 Agent
 
 ```bash
-python agent.py
+python -X utf8 agent.py
 ```
 
-进入交互模式后输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」、「读 README.md 并总结要点」等）。任务结束后自动追加到 `agent_memory.md`，下次启动时作为 Progressive Context 加载进 system prompt。
+进入交互模式后输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」）。对话中出现值得跨会话记住的持久事实时，模型会自主用 `write_file` / `edit` 更新 `memory/MEMORY.md`（策展式，对齐 Claude Code）；下次启动时其内容加载进 system prompt。
 
 | 命令 | 作用 |
 |---|---|
-| `/memory` 或 `/m` | 查看当前记忆文件内容 |
-| `quit` / `exit` / `q` | 退出 |
+| `/help` | 显示可用命令（遍历注册表自动生成） |
+| `/status` | 显示会话状态（模型 / 会话 ID / 消息数 / 记忆配置 / 已完成任务数） |
+| `/memory` | 查看项目级记忆（`memory/agent_memory.md`） |
+| `/resume` | 列出历史会话（时间 + 首句摘要），输编号恢复并回放 |
+| `/new` | 开启新会话（清空活历史 + 换新会话 ID；旧会话文件留在磁盘） |
+| `/exit` `/quit` | 退出程序 |
 
-### 可调参数（Part 4 / Part 5）
+> **管道自动跑**：`printf '任务\n/quit\n' | python -X utf8 agent.py`——非终端环境下 render 自动降级（`input()` + 去色），退出必须用 `/quit`（裸词退出已移除）。
+
+### 可调参数（`memory.py` 顶部）
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `MEMORY_WINDOW_LINES` | 50 | 长期记忆加载到 system prompt 的滑动窗口（行数） |
+| `MEMORY_WINDOW_LINES` | 50 | MEMORY.md 加载进 system prompt 的行数上限（策展应保持精炼，此为防膨胀保险丝） |
 | `COMPACT_THRESHOLD_MESSAGES` | 10 | messages 条数达此阈值触发 compact_messages |
 | `COMPACT_KEEP_RECENT` | 4 | compact 时保留最近 N 条原始消息 |
 | `USE_CACHE_CONTROL` | True | 是否启用 prompt caching；某些兼容网关不支持时可关掉 |
 
-> 运行时会在当前目录生成 `agent_memory.md`（已加入 `.gitignore`），每个用户的记忆不同，不应提交。
+> 另有 `USE_THINKING` 思考模式开关（`agent.py` 顶部，默认关闭，同 demo1）。
+
+> 运行时会在当前目录生成 `memory/` 目录（已加入 `.gitignore`）：项目级 `MEMORY.md` + 会话级 `<会话ID>.jsonl`，每个用户的记忆不同，不应提交。

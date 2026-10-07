@@ -32,7 +32,7 @@
 | Demo | 轴 | 一句话公式 | 比喻 | 解决的核心问题 |
 |---|---|---|---|---|
 | **demo1** | 循环 | `LLM × 工具 × 循环 × 状态` | 给它**双手** | Agent 最小心跳——ReAct 循环跑通（base） |
-| **demo2** | 记忆 | `base × 记忆` | 给它**长期记忆 + 动态压缩** | 任务结束就忘；多轮 ReAct 把 messages 撑爆上下文窗口 |
+| **demo2** | 记忆 | `base × 记忆` | 给它**长期记忆 + 动态压缩** | 重启就忘（会话不持久）；messages 会话内无限增长，撑爆上下文窗口、烧 token |
 | **demo3** | 工具 | `base × 工具扩展` | 给它**更多手脚 + 远程工具箱** | 工具只有 read/write/bash/edit；想接外部协议 |
 | **demo4** | 规划 | `base × 规划` | 给它**纸笔 + 套路手册** | 走一步看一步容易跑偏；常见任务每次重新想 |
 | **demo5** | 多 Agent | `base × 多 Agent` | 给它**一次性助手 + 项目团队** | 单 Agent 上下文膨胀；不能外包/协作独立子任务 |
@@ -47,10 +47,11 @@
 | 轴 | 所属 Demo | 核心机制 |
 |---|---|---|
 | **ReAct 循环** | demo1 | `messages.append(user) → LLM → tool_use → tool_result → ... → stop_reason="end_turn"` |
-| **短期记忆**（messages） | demo2 base | 默认就有；问题在撑爆上下文窗口 |
-| **长期记忆**（落盘文件） | demo2 | `agent_memory.md`，跨任务持久化 |
+| **短期记忆**（messages） | demo2 base | 默认就有（demo1 会话内已持续累积）；问题在无限增长撑爆上下文窗口 |
+| **长期记忆**（落盘文件） | demo2 | `memory/MEMORY.md` 模型策展（对齐 Claude Code）：system prompt 带维护指引，模型用 write_file / edit 自主写入持久事实 |
 | **上下文压缩** | demo2 | `compact_messages` 滚动摘要，防 messages 撑爆 |
 | **Prompt caching** | demo2 | `cache_control` breakpoint + 5/60min TTL，长 prompt 不爆成本 |
+| **会话持久化**（/resume） | demo2 | `memory/<会话ID>.jsonl` 一行一条只追加；重启后 `/resume` 扫目录恢复——模型无状态，「会话」只是每次请求带上的 messages 数组 |
 | **MCP**（外部工具协议） | demo3 | client-server + JSON-RPC 风格 round-trip，挂外部 server |
 | **Plan 模式**（手动 + 自动） | demo4 | 手动开 plan 模式 / LLM 自动决策 plan 与否；TodoWrite 风格 step 列表 |
 | **Skill** | demo4 | SKILL.md 预消化的工作流，description 匹配后注入 prompt |
@@ -113,12 +114,12 @@ Agent 每次任务结束，踩过的坑、试出来的窍门不该随上下文�
 
 | 载体 | 含义 | 本系列对应的轴 |
 |---|---|---|
-| **知识** | 把经验写成可检索的事实 | demo2 `agent_memory.md`——任务结果摘要落盘，下次启动加载 |
+| **知识** | 把经验写成可检索的事实 | demo2 `memory/MEMORY.md`——模型策展的持久事实落盘，下次启动加载 |
 | **指令** | 把经验写成可执行的工作流模板 | demo4 `skills/review.md`——description 匹配后注入 prompt |
 | **程序** | 把经验写死成 Harness 代码层约束 | demo6 `PERMISSION_RULES` / Hook——不靠 prompt 引导，LLM 绕不过去 |
 | 参数 | 把经验训练进模型权重 | 超出教学范围（见第八节） |
 
-一个巧妙的呼应：**Claude Code 的 `MEMORY.md`** 就是这套机制的工业版——本系列 demo2 的 `agent_memory.md`，正是它的最简教学版。
+一个巧妙的呼应：**Claude Code 的 `MEMORY.md`** 就是这套机制的工业版——demo2 的 `memory/MEMORY.md` 与它同名同构：system prompt 带维护指引，模型发现值得持久的事实就用普通文件工具（write_file / edit）自主更新，而不是任务结束自动写日志。
 
 **诚实的边界**：本系列给的是「沉淀的三种载体」，还不是完整的「持续进化闭环」。完整的闭环要把沉淀物**验证 → 发布 → 回滚**（改坏了能退回来），这套管理机制是工业级 harness 的事，不在 6 个 demo 内（见第八节）。但理解了 demo2/4/6 提供的三种载体，再看闭环就只剩「怎么管这些沉淀物」一层工程问题。
 
@@ -146,7 +147,7 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 | Demo | 入口 | 核心新增文件 | 讲稿 |
 |---|---|---|---|
 | demo1 | `demo1-react/agent.py`（+ `agent_single.py` 原始单文件版；拆出 `tools.py` / `render.py`） | — | `demo1-react/讲稿.md` |
-| demo2 | `demo2-memory/agent.py` | `agent_memory.md`（运行时生成） | `demo2-memory/讲稿.md` |
+| demo2 | `demo2-memory/agent.py`（+ `tools.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `memory/` 双层记忆目录（运行时生成：MEMORY.md + 会话 jsonl） | `demo2-memory/讲稿.md` |
 | demo3 | `demo3-tools/agent.py` + `demo3-tools/mcp_server.py` | — | `demo3-tools/讲稿.md` |
 | **demo4** | `demo4-plan/agent.py` | `skills/review.md`（示例 Skill——代码审查工作流） | `demo4-plan/讲稿.md` |
 | **demo5** ✅ | `demo5-multiagent/agent_sub.py` + `demo5-multiagent/agent_team.py` | —（两份 agent 入口，一份讲稿对照讲） | `demo5-multiagent/讲稿.md` |
@@ -154,7 +155,7 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 
 > 每个目录下还有一份 `README.md`——精简的**设计方案 + 运行说明**（安装/配置/启动命令），深度讲解看 `讲稿.md`。
 
-> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环；demo2-6 迁移前各自内部的 Part 细分略有不同）。demo1 正式版已先行拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层，rich + prompt_toolkit），demo2-6 迁移到该结构前暂保持单文件。
+> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环；demo3-6 迁移前各自内部的 Part 细分略有不同）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2 已迁移**到该结构并新增 `memory.py`（记忆层——记忆轴独立成文件）；demo3-6 迁移前暂保持单文件。
 
 ### demo5 的特殊结构
 
@@ -219,11 +220,11 @@ demo6: = base × 约束
 ## 七、运行环境
 
 - Python 3.9+
-- 依赖：`anthropic` SDK（兼容网关）+ `rich` / `prompt_toolkit`（demo1 渲染层）+ `requests`（demo3 MCP Client）
+- 依赖：`anthropic` SDK（兼容网关）+ `rich` / `prompt_toolkit`（demo1/2 渲染层）+ `requests`（demo3 MCP Client）
 - **网关 / 模型**：所有 demo 默认走**智谱 BigModel 的 Anthropic 兼容网关**（`https://open.bigmodel.cn/api/anthropic`）+ `glm-5.2` 模型——接口与 Anthropic SDK 完全兼容，换官方 API 或别的兼容网关只需改 `BASE_URL` / `MODEL`
 - **API Key 配置**：
-  - **demo1（已拆分重构）——两级回退**：环境变量 `ANTHROPIC_API_KEY` → 运行时交互式输入（代码内不再有 `API_KEY` 常量）
-  - **demo2-6（待迁移单文件版）——三级回退**：
+  - **demo1 / demo2（已迁移新结构）——两级回退**：环境变量 `ANTHROPIC_API_KEY` → 运行时交互式输入（代码内不再有 `API_KEY` 常量）
+  - **demo3-6（待迁移单文件版）——三级回退**：
   1. 设环境变量 `ANTHROPIC_API_KEY`（优先级最高）
   2. 改 `agent.py` Part 1 顶部的 `API_KEY = ""`（持久化；env 未设时才生效）
   3. 都没设 → 首次运行时交互式输入（仅本次有效）
@@ -237,7 +238,7 @@ demo6: = base × 约束
 
 | 优化点 | 涉及轴 | 工业做法 |
 |---|---|---|
-| **中断恢复**（--resume / --continue） | 记忆 | 会话状态（messages）落盘到本地，下次启动加载接着干；不是知识记忆而是执行状态 |
+| **中断恢复**（--resume / --continue） | 记忆 | 会话状态（messages）落盘到本地，下次启动加载接着干；不是知识记忆而是执行状态（demo2 已实现教学版：`memory/<会话ID>.jsonl` + `/resume` 命令） |
 | **会话级 hook** | 约束 | 除 PreToolUse/PostToolUse 外，还有 `SessionStart` / `UserPromptSubmit` / `PreCompact` 等会话级事件，最常用于环境信息注入 |
 | **并发工具调用** | 循环 | `parallel_tool_use=true`，LLM 一次 turn 可以并行调多个独立工具（如同时 read_file 三个文件） |
 | **Token 级压缩触发** | 记忆 | compact 不按条数触发，按上下文窗口占比（如 80%）触发，更精确 |

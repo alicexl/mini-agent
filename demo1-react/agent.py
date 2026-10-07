@@ -113,18 +113,23 @@ def init_client() -> None:
 MAX_ITERATIONS = 30  # 防止大模型陷入死循环
 
 
-def run_agent(user_input: str, verbose: bool = True) -> str:
+def run_agent(user_input: str, history: list, verbose: bool = True) -> str:
     """
     运行 Agent 处理一次用户任务。
 
     Args:
         user_input: 用户的任务目标
+        history: 会话历史（就地追加，跨任务持续增长——无限增长问题留给 demo2）
         verbose: 是否打印每一轮的决策与行动（教学演示建议开启）
 
     Returns:
         Agent 的最终文本回复
     """
-    messages = [{"role": "user", "content": user_input}]
+    # 直接在会话历史上追加——demo1 不做任何上下文管理（不压缩、不清零、不持久化）。
+    # messages 会话内跨任务持续增长（每轮全量重发，越来越贵），这个「无限增长」
+    # 问题正是 demo2 记忆轴（compact / caching / 持久化）要解决的
+    history.append({"role": "user", "content": user_input})
+    messages = history
     system_prompt = (
         "你是一个有用的助手，可以通过工具读写文件、执行命令，帮用户完成任务。"
         "工作流程：先理解需求，再动手实现，实现完后必须运行验证。"
@@ -158,10 +163,11 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
                 elif block.type == "tool_use":
                     print_step("tool_call", f"{block.name}({block.input})")
 
-        # ---- 判断是否结束 ----
+        # ---- 判断是否结束 ----（最终回复也留在会话历史里，下个任务能看到）
         if response.stop_reason != "tool_use":
             if verbose:
                 print_divider("任务完成")
+            messages.append({"role": "assistant", "content": response.content})
             return "".join(b.text for b in response.content if b.type == "text")
 
         # ---- 行动：本地执行工具 + 感知：收集结果 ----
@@ -207,7 +213,7 @@ def run_agent(user_input: str, verbose: bool = True) -> str:
 if __name__ == "__main__":
     init_client()
 
-    state = SessionState(model=MODEL, base_url=BASE_URL)
+    state = SessionState(model=MODEL, base_url=BASE_URL)  # history 在 state 里，跨任务增长
     print_banner("Demo1 Agent 已启动", [
         f"模型:   {MODEL}",
         f"网关:   {BASE_URL}",
@@ -230,8 +236,7 @@ if __name__ == "__main__":
             continue
 
         try:
-            final = run_agent(user_input, verbose=True)
-            state.tasks_done += 1
+            final = run_agent(user_input, state.history, verbose=True)
             print_markdown(final)
         except Exception as e:
             print_error(f"[错误] {e}")

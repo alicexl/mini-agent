@@ -24,10 +24,10 @@ class Command:
 
 @dataclass
 class SessionState:
-    """跨轮次的会话状态——命令读写它，主循环往里计数"""
+    """跨轮次的会话状态——命令读写它"""
     model: str
     base_url: str
-    tasks_done: int = 0
+    history: list = field(default_factory=list)  # 会话历史（跨任务持续增长，重启即丢）
     extra_lines: list = field(default_factory=list)  # 各 demo 自定的附加状态行
 
 
@@ -44,7 +44,7 @@ def _cmd_status(state: SessionState) -> bool:
         f"模型:   {state.model}",
         f"网关:   {state.base_url}",
         f"工具数: {len(TOOLS)}（{', '.join(t['name'] for t in TOOLS)}）",
-        f"已完成任务数: {state.tasks_done}",
+        f"消息:   {len(state.history)} 条（会话内持续增长）",
         *state.extra_lines,
     ]
     console.print("\n" + "\n".join(f"[dim]{l}[/]" for l in lines) + "\n")
