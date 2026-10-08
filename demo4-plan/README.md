@@ -1,47 +1,51 @@
 # Demo4 — 规划轴
 
-> 在 demo1-react（base）上独立叠加「规划轴」：新增 `plan` 工具（自动决策版） + Skill 可复用的工作流模板。
+> 在 demo2（base × 记忆）基础上叠加规划轴——**plan（当前任务拆步骤）、Skill（历史经验复用）、ask_user_question（歧义时主动问用户）**。继承全部记忆能力（无自动压缩，同 demo3）。
 
 ## 文档导航
 
 - **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（5 章）
   1. demo4 干了什么
-  2. 机制一：plan（自动决策版）
-  3. 机制二：Skill（可复用的工作流模板）
-  4. 真实演示案例（简单任务跳过 plan / 复杂任务 plan 列步骤 / Skill 触发）
+  2. 机制一：plan
+  3. 机制二：Skill
+  4. 真实演示案例
   5. 总结
+
+> 讲稿按重构前的单文件版撰写，代码已迁移到八文件结构——讲稿更新待做。
 
 ## 关键文件
 
 | 文件 | 说明 |
 |---|---|
-| `agent.py` | Agent 主程序（Part 1-5：客户端 / 工具定义（含 plan + use_skill）/ 工具实现 / Skill 加载器 / 主循环） |
-| `skills/review.md` | 示例 Skill——代码审查工作流（YAML frontmatter + 工作流 body） |
-| `讲稿.md` | 教学讲稿 |
+| `agent.py` | 主入口：客户端 + ReAct 主循环（工具合并 + plan 调用后移除）+ REPL |
+| `tools.py` | 工具层（demo1 四件套，本地） |
+| `plan.py` | **规划层**：plan 工具 + Skill 加载器 + use_skill（渐进式披露） |
+| `ask.py` | **提问层**：ask_user_question 方向键 UI + 非 TTY 降级（对齐 Claude Code 的 AskUserQuestion） |
+| `render.py` | 渲染层（demo2 版：分色 + cache 统计 + user 回放） |
+| `memory.py` | 记忆层（demo2 版减自动压缩） |
+| `session.py` | 会话层：`memory/<会话ID>.jsonl` 持久化 + `/resume` |
+| `commands.py` | 命令层：`/help` `/status` `/tools` `/skills` `/memory` `/resume` `/new` `/compact` `/quit` |
+| `skills/review.md` | 示例 Skill——代码审查工作流 |
+| `memory/` | 运行时生成的双层记忆目录（已 gitignore，同 demo2） |
 
 ## 设计要点
 
-### plan（自动决策版）
+### 与 demo2 的差异
 
-- demo1 的工具保留不变
-- demo4 新增 `plan` + `use_skill` 两个工具
-- **plan**：LLM 列步骤（字符串数组），Agent 打印清单。一次性可视化，不追踪进度。plan 调用一次后从 tools 移除
-- **何时用由 LLM 自动判断**：
-  - 简单任务（1-2 步、单一工具）→ 跳过 plan，直接 ReAct
-  - 复杂任务（3+ 步、多工具协作、有依赖）→ 先 plan 列步骤
+- **新增 `plan.py`**（规划层）+ **`ask.py`**（提问层）：规划轴的两个新机制
+- **无自动压缩**（同 demo3）：压缩只由 `/compact` 手动发起
 
-### Skill（可复用的工作流模板）
+### plan：一次性规划
 
-- 每个 skill 是 `skills/*.md` 文件，YAML frontmatter 三字段：`name` / `description` / `triggers`（关键词数组）
-- frontmatter 之后是 body——工作流正文（多步指令模板）
-- **加载时机**：启动时 `load_skills()` 扫目录 + 解析 frontmatter → 内存维护 `{name: skill}` 字典
-- **激活时机**：system prompt 含所有 skill 的元信息（name + description + triggers）；LLM 看到用户任务匹配某 skill 时，自主调用 `use_skill` 工具获取 body；body 以 tool_result 形式进入 messages
-- **system prompt 两层叠加**：
-  1. 基础说明（角色）
-  2. 可用 Skills 元信息（name + description + triggers，不含 body）
-- **为什么 body 不进 system prompt**：skill 一多就撑爆上下文。元信息每个 skill 一两行（100 个 skill 也才几百 token），body 只在 LLM 需要时通过 `use_skill` 拉取
-- 简易 YAML 解析用正则实现（`_parse_frontmatter`），不引入 PyYAML 依赖——教学代码保持零额外依赖
-- 对应 Claude Code 的 Skill 工具（`commit` / `review-pr` 等命令的本质）
+LLM 自判任务复杂度——3 步以上、步骤间有依赖的任务先调 `plan` 列步骤（Agent 打印清单），**调用一次后从 tools 移除**（列完就放手，不反复管理进度）；简单任务直接干（描述里写了反向抑制）。
+
+### Skill：渐进式披露
+
+`skills/*.md`（YAML frontmatter：name/description/triggers）启动时扫描加载；**system prompt 只放元信息**（name + description + 触发词），正文由 LLM 按需经 `use_skill` 拉取——skill 再多也只增加少量元信息开销。
+
+### ask_user_question：歧义时主动问
+
+需求有歧义 / 有多种合理实现 / 拿不准方向时，LLM 调 `ask_user_question` 把问题抛给用户（1-4 题、每题 2-4 选项、选项带说明），而不是自作主张。UI 自动追加「其他（自定义输入）」；**非 TTY 环境（管道喂任务）自动降级**为逐题打印 + 读一行。
 
 ## 运行
 
@@ -51,58 +55,31 @@
 pip install -r requirements.txt
 ```
 
-依赖清单（`anthropic`）。
+依赖：`anthropic` + `rich` + `prompt_toolkit`。
 
 ### 配置 API Key
 
-**推荐：环境变量**（避免 Key 进 git 历史）
+环境变量 `ANTHROPIC_API_KEY`（推荐，可持久化）；未设时启动交互式输入。
+
+### 启动 Agent
 
 ```bash
-# Git Bash
-export ANTHROPIC_API_KEY="你的智谱 BigModel Key"
-python agent.py
+python -X utf8 agent.py
 ```
 
-或者改 `agent.py` Part 1 顶部的 `API_KEY = ""`（不推荐——会被 git track）。
+演示建议：
+- **ask**：输入「帮我生成一个密码」——类型/长度没说清，Agent 会主动提问（方向键选择或输入自定义答案）
+- **plan**：输入「我需要你做几件事：1) 读 plan.py 找出所有工具名 2) 整理成表格 3) 写入 inventory.md 4) 读回验证，注意步骤间有依赖」——先列步骤清单再干活
+- **Skill**：输入「帮我 review 一下 plan.py」——匹配 review skill 触发词，先取工作流再按步骤审查
 
-默认走智谱 BigModel 的 Anthropic 兼容网关（`https://open.bigmodel.cn/api/anthropic`）+ `glm-5.2` 模型，换官方 API 或其他兼容网关只需改 `BASE_URL` / `MODEL`。
+> **管道自动跑**：`printf '任务\n答案\n/quit\n' | python -X utf8 agent.py`——ask 的方向键 UI 自动降级为编号选择，答案按行喂入。
 
-### 启动
+### 可调参数（`memory.py` 顶部，同 demo2/demo3）
 
-```bash
-python agent.py
-```
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `MEMORY_WINDOW_LINES` | 50 | MEMORY.md 加载进 system prompt 的行数上限（防止上下文无限增长） |
+| `COMPACT_KEEP_RECENT` | 4 | `/compact` 时保留最近 N 条原始消息 |
+| `USE_CACHE_CONTROL` | True | 是否启用 prompt caching |
 
-启动后会打印已加载的工具列表 + skill 列表。进入交互模式后输入任意任务：
-
-- **简单任务示例**：`统计当前目录下 .py 文件数` —— LLM 跳过 plan，直接 execute_bash
-- **复杂任务示例**：`我需要做几件事：1) 先读 agent.py...注意第2步依赖第1步的结果` —— LLM 自判为复杂任务，调 plan 列步骤
-- **Skill 触发示例**：`帮我 review 一下 agent.py` —— LLM 看到 review skill 元信息，自主调用 `use_skill` 获取工作流，按流程输出结构化意见
-- `/skills` 查看已加载的 skills
-- `quit` / `exit` / `q` 退出
-
-### 自定义 Skill
-
-在 `skills/` 目录下新建 `*.md` 文件，按以下格式：
-
-```markdown
----
-name: my-skill
-description: 一句话说明做什么
-triggers: ["触发词1", "触发词2"]
----
-
-# 工作流正文
-
-收到匹配任务时按以下步骤执行：
-
-1. 第一步...
-2. 第二步...
-3. 输出格式...
-```
-
-重启 Agent 即生效。
-
-### 运行时产物
-
-- plan 状态只在终端打印，不落盘。每次新任务自动清空
+> 另有 `USE_THINKING` 思考模式开关（`agent.py` 顶部，默认关闭）。
