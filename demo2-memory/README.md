@@ -7,14 +7,12 @@
 ## 文档导航
 
 - **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（含口播 / 表格 / 代码 / 运行时序）
-  1. demo2 vs demo1 的增量：从「单轮 ReAct」到「带记忆的循环」
-  2. 长期记忆系统：信息搬运的本质（agent_memory.md + 滑动窗口）
-  3. 上下文管理一：动态压缩（compact_messages）
-  4. 上下文管理二：Prompt caching（cache_control breakpoint）
-  5. 示例解读：长任务实测（compact 触发 + caching 命中）
+  1. 结论：demo2 比 demo1 多了什么
+  2. 记忆的两层：会话持久化与跨会话记忆
+  3. 会话内窗口管理一：动态压缩（compact_messages）
+  4. 会话内窗口管理二：Prompt caching
+  5. 示例解读：实测四机制
   6. 局限与工业级演进
-
-> 讲稿按重构前的单文件版撰写（6 个 Part），代码已迁移到五文件结构——`Part 4/5`（记忆+上下文管理）现为 `memory.py`，讲稿更新待做。
 
 概念讲解、设计原理、演进方向全部在讲稿里。本 README 只讲**怎么跑起来**。
 
@@ -27,9 +25,9 @@
 | `render.py` | 渲染层（demo1 版 + `print_cache_stats` 缓存命中统计） |
 | `memory.py` | **记忆层**：项目级记忆 + compact + caching（记忆轴机制与可调参数） |
 | `session.py` | **会话层**：`memory/<会话ID>.jsonl` 会话持久化 + `/resume` 恢复 |
-| `commands.py` | 命令层：`/help` `/status` `/memory` `/resume` `/new` `/exit` |
+| `commands.py` | 命令层：`/help` `/status` `/memory` `/resume` `/new` `/compact` `/quit` |
 | `讲稿.md` | 教学讲稿 |
-| `memory/` | 运行时生成的双层记忆目录（已 gitignore）：**项目级** `MEMORY.md`（模型策展的持久事实，跨会话加载进 system prompt——对齐 Claude Code 的 MEMORY.md）+ **会话级** `<会话ID>.jsonl`（完整 messages，`/resume` 恢复） |
+| `memory/` | 运行时生成的双层记忆目录（已 gitignore）：**项目级** `MEMORY.md`（模型自主维护的持久事实，跨会话加载进 system prompt——对齐 Claude Code 的 MEMORY.md）+ **会话级** `<会话ID>.jsonl`（完整 messages，`/resume` 恢复） |
 
 ## 运行
 
@@ -61,15 +59,16 @@ export ANTHROPIC_API_KEY=你的智谱Key    # Key 格式 id.secret，在 bigmode
 python -X utf8 agent.py
 ```
 
-进入交互模式后输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」）。对话中出现值得跨会话记住的持久事实时，模型会自主用 `write_file` / `edit` 更新 `memory/MEMORY.md`（策展式，对齐 Claude Code）；下次启动时其内容加载进 system prompt。
+进入交互模式后输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」）。对话中出现值得跨会话记住的持久事实时，模型会自主用 `write_file` / `edit` 更新 `memory/MEMORY.md`（模型自主维护，对齐 Claude Code）；下次启动时其内容加载进 system prompt。
 
 | 命令 | 作用 |
 |---|---|
 | `/help` | 显示可用命令（遍历注册表自动生成） |
-| `/status` | 显示会话状态（模型 / 会话 ID / 消息数 / 记忆配置 / 已完成任务数） |
-| `/memory` | 查看项目级记忆（`memory/agent_memory.md`） |
+| `/status` | 显示会话状态（模型 / 会话 ID / 消息数 / 记忆配置） |
+| `/memory` | 查看项目级记忆（`memory/MEMORY.md`） |
 | `/resume` | 列出历史会话（时间 + 首句摘要），输编号恢复并回放 |
 | `/new` | 开启新会话（清空活历史 + 换新会话 ID；旧会话文件留在磁盘） |
+| `/compact` | 手动压缩会话历史（跳过阈值，老消息摘要成一段并全量重写会话文件） |
 | `/exit` `/quit` | 退出程序 |
 
 > **管道自动跑**：`printf '任务\n/quit\n' | python -X utf8 agent.py`——非终端环境下 render 自动降级（`input()` + 去色），退出必须用 `/quit`（裸词退出已移除）。
@@ -78,8 +77,8 @@ python -X utf8 agent.py
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `MEMORY_WINDOW_LINES` | 50 | MEMORY.md 加载进 system prompt 的行数上限（策展应保持精炼，此为防膨胀保险丝） |
-| `COMPACT_THRESHOLD_MESSAGES` | 10 | messages 条数达此阈值触发 compact_messages |
+| `MEMORY_WINDOW_LINES` | 50 | MEMORY.md 加载进 system prompt 的行数上限（自主维护应保持精炼，此为防膨胀保险丝） |
+| `COMPACT_THRESHOLD_MESSAGES` | 12 | messages 条数达此阈值触发 compact_messages |
 | `COMPACT_KEEP_RECENT` | 4 | compact 时保留最近 N 条原始消息 |
 | `USE_CACHE_CONTROL` | True | 是否启用 prompt caching；某些兼容网关不支持时可关掉 |
 

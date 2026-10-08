@@ -48,7 +48,7 @@
 |---|---|---|
 | **ReAct 循环** | demo1 | `messages.append(user) → LLM → tool_use → tool_result → ... → stop_reason="end_turn"` |
 | **短期记忆**（messages） | demo2 base | 默认就有（demo1 会话内已持续累积）；问题在无限增长撑爆上下文窗口 |
-| **长期记忆**（落盘文件） | demo2 | `memory/MEMORY.md` 模型策展（对齐 Claude Code）：system prompt 带维护指引，模型用 write_file / edit 自主写入持久事实 |
+| **长期记忆**（落盘文件） | demo2 | `memory/MEMORY.md` 模型自主维护（对齐 Claude Code）：system prompt 带维护指引，模型用 write_file / edit 自主写入持久事实 |
 | **上下文压缩** | demo2 | `compact_messages` 滚动摘要，防 messages 撑爆 |
 | **Prompt caching** | demo2 | `cache_control` breakpoint + 5/60min TTL，长 prompt 不爆成本 |
 | **会话持久化**（/resume） | demo2 | `memory/<会话ID>.jsonl` 一行一条只追加；重启后 `/resume` 扫目录恢复——模型无状态，「会话」只是每次请求带上的 messages 数组 |
@@ -114,7 +114,7 @@ Agent 每次任务结束，踩过的坑、试出来的窍门不该随上下文�
 
 | 载体 | 含义 | 本系列对应的轴 |
 |---|---|---|
-| **知识** | 把经验写成可检索的事实 | demo2 `memory/MEMORY.md`——模型策展的持久事实落盘，下次启动加载 |
+| **知识** | 把经验写成可检索的事实 | demo2 `memory/MEMORY.md`——模型自主维护的持久事实落盘，下次启动加载 |
 | **指令** | 把经验写成可执行的工作流模板 | demo4 `skills/review.md`——description 匹配后注入 prompt |
 | **程序** | 把经验写死成 Harness 代码层约束 | demo6 `PERMISSION_RULES` / Hook——不靠 prompt 引导，LLM 绕不过去 |
 | 参数 | 把经验训练进模型权重 | 超出教学范围（见第八节） |
@@ -242,7 +242,7 @@ demo6: = base × 约束
 | **会话级 hook** | 约束 | 除 PreToolUse/PostToolUse 外，还有 `SessionStart` / `UserPromptSubmit` / `PreCompact` 等会话级事件，最常用于环境信息注入 |
 | **并发工具调用** | 循环 | `parallel_tool_use=true`，LLM 一次 turn 可以并行调多个独立工具（如同时 read_file 三个文件） |
 | **Token 级压缩触发** | 记忆 | compact 不按条数触发，按上下文窗口占比（如 80%）触发，更精确 |
-| **向量记忆** | 记忆 | Chroma / Pinecone 语义检索 top-K，比文件全量加载更省 token |
+| **向量记忆** | 记忆 | Chroma / Pinecone 语义检索 top-K（通用助手路线；coding agent 主流是文件记忆） |
 | **仓库地图**（repo map） | 工具 | tree-sitter 解析全仓 → PageRank 排名选重要符号 → 压进 ~1k token 的折叠地图（Aider），让 LLM 不读全文掌握代码结构 |
 | **执行环境隔离** | 约束 | firejail / Docker / microVM（Firecracker）——Control Plane 之外的 Execution Environment 层 |
 | **可观测性** | 循环 | Token 消耗追踪、cost tracker、`--debug` 模式、进度条/spinner |

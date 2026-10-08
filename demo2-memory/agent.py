@@ -5,7 +5,7 @@ Demo2 - 带记忆的 Agent（记忆轴）
 
 公式：demo2 = base × 记忆
 
-    × 跨会话记忆（memory/MEMORY.md，模型策展——对齐 Claude Code）
+    × 跨会话记忆（memory/MEMORY.md，模型自主维护——对齐 Claude Code）
     × 会话持久化（memory/<会话ID>.jsonl，/resume 恢复）
     × 动态压缩（compact_messages，老消息滚动摘要）
     × Prompt caching（cache_control breakpoint，减少重复传输）
@@ -113,7 +113,7 @@ def init_client() -> None:
 # ============================================================
 # 与 demo1 的核心区别：
 #   - system prompt = 基础 + MEMORY.md 内容 + 维护指引，走 cache_control
-#   - 每轮 ReAct 前检查是否需要 compact_messages
+#   - 主循环在每个任务开始前检查水位，到阈值先 compact 再开工
 #   - 跨会话记忆由模型在对话中用 write_file / edit 自主维护（无自动落盘）
 #   - 会话历史落盘 memory/<会话ID>.jsonl，支持 /resume
 #   - 每轮打印 cache 命中统计（创建 vs 命中）
@@ -123,19 +123,17 @@ MAX_ITERATIONS = 30  # 防止大模型陷入死循环
 
 def run_agent(user_input: str, history: list, verbose: bool = True):
     """
-    在活会话历史上跑一轮 ReAct（history 就地追加/压缩）。
+    在活会话历史上跑一轮 ReAct（history 就地追加；压缩由主循环在任务开始前做）。
 
     流程：
         1. 加载项目级记忆（MEMORY.md）→ 构建 system prompt（含维护指引）
         2. 在 history 上进入 ReAct 循环：
-           a. 检查是否触发 compact_messages
-           b. 调 LLM（system 走 cache_control）
-           c. 判停 / 行动 / 感知（同 demo1）
+           a. 调 LLM（system 走 cache_control）
+           b. 判停 / 行动 / 感知（同 demo1）
         3. 跨会话记忆由模型在对话中用 write_file / edit 自主维护（无自动落盘）
 
     Returns:
         (最终回复, 本轮新增消息列表)
-        compact 触发过则新增列表为 None——历史被改写，调用方应全量重写会话文件
     """
     # 1. 构建 system prompt（含项目级记忆）+ 转 cache_control blocks
     system_prompt = build_system_prompt(verbose=verbose)
@@ -143,7 +141,6 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
 
     # 2. ReAct 循环（在活历史上追加）
     new_messages = []
-    compacted = False
 
     user_msg = {"role": "user", "content": user_input}
     history.append(user_msg)
@@ -154,12 +151,7 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
             print_divider(f"第 {loop_idx} 轮 ReAct")
             print_messages(history)
 
-        # 2a. 上下文管理：检查是否需要 compact（改写整个历史，增量作废）
-        if len(history) >= COMPACT_THRESHOLD_MESSAGES:
-            history[:] = compact_messages(list(history), client, MODEL, verbose=verbose)
-            compacted = True
-
-        # 2b. 决策：调 LLM（system 走 cache_control）
+        # 2a. 决策：调 LLM（system 走 cache_control）
         create_kwargs = {
             "model": MODEL,
             # 思考预算计入 max_tokens，开启 thinking 时须抬高输出上限
@@ -183,18 +175,17 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
                     print_step("tool_call", f"{block.name}({block.input})")
             print_cache_stats(response.usage, use_cache_control=True)
 
-        # 2c. 判停（最终回复也落进会话历史——恢复会话时能看到上次「答了什么」）
+        # 2b. 判停（最终回复也落进会话历史——恢复会话时能看到上次「答了什么」）
         if response.stop_reason != "tool_use":
             if verbose:
                 print_divider("任务完成")
             result = "".join(b.text for b in response.content if b.type == "text")
             final_msg = {"role": "assistant", "content": response.content}
             history.append(final_msg)
-            if not compacted:
-                new_messages.append(final_msg)
+            new_messages.append(final_msg)
             break
 
-        # 2d. 行动 + 感知
+        # 2c. 行动 + 感知
         assistant_msg = {"role": "assistant", "content": response.content}
         history.append(assistant_msg)
 
@@ -224,12 +215,11 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
 
         results_msg = {"role": "user", "content": tool_results}
         history.append(results_msg)
-        if not compacted:
-            new_messages.extend([assistant_msg, results_msg])
+        new_messages.extend([assistant_msg, results_msg])
     else:
         result = "[错误] 超过最大循环次数"
 
-    return result, (None if compacted else new_messages)
+    return result, new_messages
 
 
 # ============================================================
@@ -242,6 +232,7 @@ if __name__ == "__main__":
     state = SessionState(
         model=MODEL,
         base_url=BASE_URL,
+        client=client,
         session_id=session.new_session_id(),
         extra_lines=[
             f"项目记忆: {MEMORY_FILE}（窗口 {MEMORY_WINDOW_LINES} 行）",
@@ -272,14 +263,16 @@ if __name__ == "__main__":
         if action == "continue":
             continue
 
+        # 任务开始前检查水位：上个任务/恢复的会话攒下的消息到阈值，先压缩再开工。
+        # 压缩即重写（内存怎么变，文件就怎么写）；run_agent 期间纯追加，结束批量落盘。
+        if len(state.history) >= COMPACT_THRESHOLD_MESSAGES:
+            state.history[:] = compact_messages(list(state.history), client, MODEL, verbose=True)
+            session.rewrite_session(state.session_id, state.history)
+            print(f"[会话] compact 改写历史，已全量重写 {session.session_file(state.session_id)}")
+
         try:
             final, new_msgs = run_agent(user_input, state.history, verbose=True)
-            # 会话级落盘：增量追加；compact 改写过历史则全量重写
-            if new_msgs is None:
-                session.rewrite_session(state.session_id, state.history)
-                print(f"[会话] compact 改写历史，已全量重写 {session.session_file(state.session_id)}")
-            else:
-                session.append_messages(state.session_id, new_msgs)
+            session.append_messages(state.session_id, new_msgs)
             print_markdown(final)
         except Exception as e:
             print_error(f"[错误] {e}")

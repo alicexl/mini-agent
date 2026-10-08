@@ -5,7 +5,7 @@ Demo2 记忆层 — 记忆轴的全部机制
 
 demo2 = base × 记忆。记忆轴在此独立成文件（与 demo1「工具是独立资产」同构）：
 
-    跨会话记忆     memory/MEMORY.md，模型策展（对齐 Claude Code）：system prompt
+    跨会话记忆     memory/MEMORY.md，模型自主维护（对齐 Claude Code）：system prompt
                   带维护指引，模型发现值得持久的事实就用 write_file / edit 更新；
                   每次任务开始加载其内容进 system prompt
     动态压缩       compact_messages：达到阈值时，老消息让 LLM 摘要成一段，
@@ -14,7 +14,7 @@ demo2 = base × 记忆。记忆轴在此独立成文件（与 demo1「工具是�
                   首次请求创建缓存，后续命中免重传
 
 memory/ 目录下的双层记忆分工（对照 Claude Code 的 MEMORY.md + projects/*.jsonl）：
-    memory/MEMORY.md         项目级——模型策展的持久事实，跨会话加载进 system prompt（本文件）
+    memory/MEMORY.md         项目级——模型自主维护的持久事实，跨会话加载进 system prompt（本文件）
     memory/<会话ID>.jsonl    会话级——完整 messages，/resume 恢复（见 session.py）
 
 揭示的本质：大模型有上下文窗口限制，本地必须把外部存储的信息有选择地
@@ -29,13 +29,13 @@ import os
 # 可调参数（demo2 的实验区）
 # ============================================================
 
-# --- 跨会话记忆（项目级，存 memory/ 目录，模型策展） ---
+# --- 跨会话记忆（项目级，存 memory/ 目录，模型自主维护） ---
 MEMORY_FILE         = os.path.join("memory", "MEMORY.md")  # 项目级记忆文件（模型维护）
 MEMORY_WINDOW_LINES = 50                 # 防膨胀保险丝：加载时最多取最后 N 行
 
 # --- 动态压缩 ---
 # 压缩触发阈值（消息条数）。生产级按 token 占比触发（见总览第八节）。
-COMPACT_THRESHOLD_MESSAGES = 10  # 演示用低阈值，方便短任务就触发一次压缩
+COMPACT_THRESHOLD_MESSAGES = 12  # 演示用低阈值，方便短任务就触发一次压缩
 COMPACT_KEEP_RECENT        = 4   # 压缩时保留最近 N 条原始消息
 
 # --- Prompt caching ---
@@ -51,12 +51,12 @@ BASE_PROMPT = (
 
 
 # ============================================================
-# 跨会话记忆：MEMORY.md（模型策展）加载
+# 跨会话记忆：MEMORY.md（模型自主维护）加载
 # ============================================================
 
 def load_memory() -> str:
     """
-    加载记忆文件（策展式：正常应保持精炼，最后 N 行是防膨胀保险丝）。
+    加载记忆文件（模型自主维护：正常应保持精炼，最后 N 行是防膨胀保险丝）。
     第一次运行时文件不存在 → 返回空字符串。
     """
     if not os.path.exists(MEMORY_FILE):
@@ -71,7 +71,7 @@ def load_memory() -> str:
         return ""
 
 
-# 记忆维护指引（对齐 Claude Code 的 MEMORY.md：模型用普通文件工具自己策展）
+# 记忆维护指引（对齐 Claude Code 的 MEMORY.md：模型用普通文件工具自己维护）
 MEMORY_GUIDANCE = """
 
 ## 记忆维护指引
@@ -189,14 +189,15 @@ def _find_recent_start(messages: list) -> int:
     return start
 
 
-def compact_messages(messages: list, client, model: str, verbose: bool = False) -> list:
+def compact_messages(messages: list, client, model: str, verbose: bool = False, force: bool = False) -> list:
     """
     动态压缩 messages：保留最近 N 条，老的让 LLM 摘要成一段。
 
     client / model 由调用方传入（memory 层不持有全局 client）。
+    force=True 跳过阈值检查——供 /compact 命令手动触发（自动触发走阈值）。
     返回新的 messages list（不修改原 list）。摘要失败时静默回退到原 messages。
     """
-    if len(messages) < COMPACT_THRESHOLD_MESSAGES:
+    if len(messages) < COMPACT_THRESHOLD_MESSAGES and not force:
         return messages
 
     # 切点保护：不能让 recent 第一条是 tool_result 消息（会切断 tool_use ↔ tool_result 配对）
@@ -218,13 +219,14 @@ def compact_messages(messages: list, client, model: str, verbose: bool = False) 
         transcript_parts.append(f"### {role}\n{text}")
     transcript = "\n\n".join(transcript_parts)
 
-    compact_system_prompt = """你是上下文压缩助手。把下面的 Agent 对话历史压缩成一段简洁的事实摘要。
+    compact_system_prompt = """你是上下文压缩助手。把下面的 Agent 对话历史压缩成一份结构化摘要，供后续工作无缝接续。
 
-要求：
-1. 保留：用户意图、关键决策、工具调用的核心结果（文件路径/数字/结论）
-2. 丢弃：重复的试错、冗长的工具原始输出、无关细节
-3. 用一段 200-400 字的连贯叙述输出，不要分点列条
-4. 不要加任何前缀说明，直接输出摘要内容"""
+要求按三段输出：
+1. 用户请求与意图：用户要做什么、有哪些约束（用户原话逐字保留，不要转述）
+2. 关键结果与决策：完成了什么、重要的文件路径/数字/结论、踩过并修复的坑
+3. 当前进度与下一步：压缩前正在做什么、紧接着的下一步是什么
+
+丢弃：重复的试错过程、冗长的工具原始输出。不要加任何前缀说明，直接输出摘要。"""
 
     try:
         response = client.messages.create(
@@ -242,7 +244,10 @@ def compact_messages(messages: list, client, model: str, verbose: bool = False) 
         # 把摘要注入成 [历史对话摘要] 标记消息，让后续 LLM 知道这是压缩过的上下文
         summary_msg = {
             "role": "user",
-            "content": f"[历史对话已压缩，摘要如下]\n{summary}",
+            "content": (
+                f"[历史对话已压缩，摘要如下]\n{summary}\n"
+                "请基于摘要继续工作，不要向用户复述摘要。"
+            ),
         }
         ack_msg = {
             "role": "assistant",

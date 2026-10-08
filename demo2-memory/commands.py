@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Demo2 命令层 — 斜杠命令系统（/help /status /memory /resume /new /exit）
+Demo2 命令层 — 斜杠命令系统（/help /status /memory /resume /new /compact /exit）
 
 主循环拿到用户输入后，先看第一个字符是不是 /：斜杠命令由程序自己解释执行，
 其余输入才发给 Agent。命令用注册表挂载——加命令 = 往 COMMANDS 加一项，
@@ -16,6 +16,7 @@ from render import console, print_step
 from memory import (
     MEMORY_FILE, MEMORY_WINDOW_LINES, COMPACT_THRESHOLD_MESSAGES,
     COMPACT_KEEP_RECENT, USE_CACHE_CONTROL, load_memory, _extract_text,
+    compact_messages,
 )
 
 
@@ -31,6 +32,7 @@ class SessionState:
     """跨轮次的会话状态——命令读写它，主循环往里计数"""
     model: str
     base_url: str
+    client: object = None  # 主循环 init_client() 后注入（/compact 摘要要用）
     session_id: str = ""
     history: list = field(default_factory=list)  # 活会话消息（/resume 填回、/new 清空）
     extra_lines: list = field(default_factory=list)  # 各 demo 自定的附加状态行
@@ -49,10 +51,29 @@ def _cmd_status(state: SessionState) -> bool:
         f"模型:   {state.model}",
         f"网关:   {state.base_url}",
         f"会话:   {state.session_id}",
-        f"消息:   {len(state.history)} 条（compact 阈值 {COMPACT_THRESHOLD_MESSAGES}）",
+        f"消息:   {len(state.history)} 条（compact 阈值 {COMPACT_THRESHOLD_MESSAGES}，/compact 可手动压缩）",
         *state.extra_lines,
     ]
     console.print("\n" + "\n".join(f"[dim]{l}[/]" for l in lines) + "\n")
+    return True
+
+
+def _cmd_compact(state: SessionState) -> bool:
+    """手动压缩会话历史（force 跳过阈值，立即压缩）——对应 Claude Code 的 /compact。"""
+    if not state.history:
+        console.print("[dim](会话还没有消息，无需压缩)[/]\n")
+        return True
+    if len(state.history) <= COMPACT_KEEP_RECENT:
+        console.print(f"[dim]消息只有 {len(state.history)} 条，压无可压[/]\n")
+        return True
+
+    before = len(state.history)
+    compacted = compact_messages(list(state.history), state.client, state.model,
+                                 verbose=True, force=True)
+    state.history[:] = compacted
+    # compact 改写了历史——全量重写会话文件（与主循环的自动压缩同款处理）
+    session.rewrite_session(state.session_id, state.history)
+    console.print(f"[dim]压缩完成：{before} → {len(state.history)} 条，会话文件已重写[/]\n")
     return True
 
 
@@ -113,6 +134,7 @@ COMMANDS = {
     "memory":  Command("memory", "查看项目级记忆", _cmd_memory),
     "resume":  Command("resume", "恢复历史会话", _cmd_resume),
     "new":     Command("new", "开启新会话", _cmd_new),
+    "compact": Command("compact", "手动压缩会话历史", _cmd_compact),
     "exit":    Command("exit", "退出程序", _cmd_exit),
     "quit":    Command("quit", "退出程序（/exit 同）", _cmd_exit),
 }
