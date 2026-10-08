@@ -148,14 +148,14 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 |---|---|---|---|
 | demo1 | `demo1-react/agent.py`（+ `agent_single.py` 原始单文件版；拆出 `tools.py` / `render.py`） | — | `demo1-react/讲稿.md` |
 | demo2 | `demo2-memory/agent.py`（+ `tools.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `memory/` 双层记忆目录（运行时生成：MEMORY.md + 会话 jsonl） | `demo2-memory/讲稿.md` |
-| demo3 | `demo3-tools/agent.py` + `demo3-tools/mcp_server.py` | — | `demo3-tools/讲稿.md` |
+| demo3 | `demo3-tools/agent.py`（+ `tools.py` / `mcp.py` / `render.py` / `memory.py` / `session.py` / `commands.py`）+ `mcp_server.py` | `memory/` 双层记忆目录（继承 demo2） | `demo3-tools/讲稿.md` |
 | **demo4** | `demo4-plan/agent.py` | `skills/review.md`（示例 Skill——代码审查工作流） | `demo4-plan/讲稿.md` |
 | **demo5** ✅ | `demo5-multiagent/agent_sub.py` + `demo5-multiagent/agent_team.py` | —（两份 agent 入口，一份讲稿对照讲） | `demo5-multiagent/讲稿.md` |
 | demo6 | `demo6-safety/agent.py` | —（两层 Control Plane 全在 agent.py 单文件内） | `demo6-safety/讲稿.md` |
 
 > 每个目录下还有一份 `README.md`——精简的**设计方案 + 运行说明**（安装/配置/启动命令），深度讲解看 `讲稿.md`。
 
-> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环；demo3-6 迁移前各自内部的 Part 细分略有不同）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2 已迁移**到该结构并新增 `memory.py`（记忆层——记忆轴独立成文件）；demo3-6 迁移前暂保持单文件。
+> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环；demo3-6 迁移前各自内部的 Part 细分略有不同）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2 / demo3 已迁移**（demo2 新增 `memory.py` 记忆层；demo3 再加 `mcp.py` MCP 客户端层，继承 demo2 记忆能力但无自动压缩）；demo4-6 迁移前暂保持单文件。
 
 ### demo5 的特殊结构
 
@@ -223,8 +223,8 @@ demo6: = base × 约束
 - 依赖：`anthropic` SDK（兼容网关）+ `rich` / `prompt_toolkit`（demo1/2 渲染层）+ `requests`（demo3 MCP Client）
 - **网关 / 模型**：所有 demo 默认走**智谱 BigModel 的 Anthropic 兼容网关**（`https://open.bigmodel.cn/api/anthropic`）+ `glm-5.2` 模型——接口与 Anthropic SDK 完全兼容，换官方 API 或别的兼容网关只需改 `BASE_URL` / `MODEL`
 - **API Key 配置**：
-  - **demo1 / demo2（已迁移新结构）——两级回退**：环境变量 `ANTHROPIC_API_KEY` → 运行时交互式输入（代码内不再有 `API_KEY` 常量）
-  - **demo3-6（待迁移单文件版）——三级回退**：
+  - **demo1 / demo2 / demo3（已迁移新结构）——两级回退**：环境变量 `ANTHROPIC_API_KEY` → 运行时交互式输入（代码内不再有 `API_KEY` 常量）
+  - **demo4-6（待迁移单文件版）——三级回退**：
   1. 设环境变量 `ANTHROPIC_API_KEY`（优先级最高）
   2. 改 `agent.py` Part 1 顶部的 `API_KEY = ""`（持久化；env 未设时才生效）
   3. 都没设 → 首次运行时交互式输入（仅本次有效）

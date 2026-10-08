@@ -1,26 +1,35 @@
 # Demo3 — MCP 工具协议
 
-> 在 demo1-react（base）上独立叠加 MCP 跨进程工具协议。
+> 在 demo2（base × 记忆）基础上叠加 MCP 跨进程工具协议——**继承全部记忆能力（无自动压缩），工具边界从本进程扩展到跨进程**。
 
 ## 文档导航
 
 - **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（6 章）
-  1. demo3 干了什么
+  1. 结论：demo3 比 demo2 多了什么
   2. MCP 协议：从函数调用到 RPC
   3. MCP Server 实现
   4. Agent 端：MCP Client + 工具合并
-  5. 真实案例
-  6. 总结
-
-## 关键文件
+  5. 与 demo2 的差异 + 真实案例
+  6. 总结## 关键文件
 
 | 文件 | 说明 |
 |---|---|
-| `agent.py` | Agent 主程序（Part 1-5：客户端 / 工具定义 / 工具实现 / MCP Client / 主循环） |
+| `agent.py` | 主入口：客户端 + ReAct 主循环（本地/MCP 统一分发）+ REPL |
+| `tools.py` | 工具层（demo1 四件套，本地） |
+| `mcp.py` | **MCP 客户端层**：握手 / 发现 / 调用；Server 不可用时降级仅本地 |
+| `render.py` | 渲染层（demo2 版：分色 + cache 统计） |
+| `memory.py` | 记忆层（demo2 版减自动压缩：MEMORY.md / 手动 compact / caching） |
+| `session.py` | 会话层：`memory/<会话ID>.jsonl` 持久化 + `/resume` |
+| `commands.py` | 命令层：`/help` `/status` `/tools` `/memory` `/resume` `/new` `/compact` `/quit` |
 | `mcp_server.py` | MCP Server（HTTP + JSON-RPC 2.0，暴露 add / multiply / weather 三个工具） |
-| `讲稿.md` | 教学讲稿 |
+| `memory/` | 运行时生成的双层记忆目录（已 gitignore，同 demo2） |
 
 ## 设计要点
+
+### 与 demo2 的差异
+
+- **新增 `mcp.py`**：MCP 客户端层——工具扩展轴的核心
+- **无自动压缩**：主循环不查阈值，压缩只由 `/compact` 手动发起（记忆能力其余全部保留）
 
 ### MCP（外部工具协议）
 
@@ -38,37 +47,27 @@
 pip install -r requirements.txt
 ```
 
-依赖清单（`anthropic` + `requests`）。
+依赖：`anthropic` + `rich` + `prompt_toolkit` + `requests`。
 
 ### 配置 API Key
 
-打开 `agent.py`，把 Part 1 顶部的 `API_KEY = ""` 改成你的智谱 BigModel Key：
-
-```python
-# agent.py Part 1
-API_KEY         = ""                                         # ← 只改这一行
-BASE_URL        = "https://open.bigmodel.cn/api/anthropic"
-MODEL           = "glm-5.2"
-MCP_URL         = "http://127.0.0.1:8888/mcp"
-```
-
-> 也支持 `ANTHROPIC_API_KEY` 环境变量临时覆盖。
+环境变量 `ANTHROPIC_API_KEY`（推荐，可持久化）；未设时启动交互式输入。MCP 地址在 `mcp.py` 顶部 `MCP_URL`（默认 `http://127.0.0.1:8888/mcp`）。
 
 ### 启动（两个终端）
-
-demo3 需要**两个进程**——MCP Server 和 Agent 各占一个终端：
 
 ```bash
 # 终端 1：起 MCP Server
 python mcp_server.py
 
 # 终端 2：起 Agent
-python agent.py
+python -X utf8 agent.py
 ```
 
-进入交互模式后输入任意任务。输入 `quit` / `exit` / `q` 退出。
+进入交互模式后输入任意任务（如「用 MCP 工具计算 35 乘以 47」——本地与 MCP 工具可在同一任务里混用，LLM 视角下无差异）。命令 `/help` 查看，`/tools` 看工具清单，`/quit` 退出。
 
 > **降级模式**：如果 MCP Server 没启动，Agent 自动降级为仅本地工具模式（4 个工具），MCP 的 add / multiply / weather 不可用。
+
+> **管道自动跑**：`printf '任务\n/quit\n' | python -X utf8 agent.py`——退出必须用 `/quit`。
 
 ### 调试 MCP Server
 

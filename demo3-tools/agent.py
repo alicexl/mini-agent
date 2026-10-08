@@ -1,52 +1,69 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Demo3-tools - 工具扩展轴的 Agent
+Demo3 - 工具扩展轴的 Agent
 
 公式：demo3 = base × 工具扩展
 
-在 demo1-react（base）基础上叠加 MCP 协议——跨进程工具协议，
-JSON-RPC 2.0 + HTTP Transport，工具可跨语言、跨机器复用。
+    × MCP 协议（mcp.py：JSON-RPC 2.0 over HTTP，跨进程工具，可跨语言跨机器）
+    × 继承 demo2 全部记忆能力（会话持久化 / MEMORY.md 模型自主维护 / caching）
+    × 手动压缩（/compact；与 demo2 的差异：无自动压缩阈值）
 
-单文件 5 个 Part：客户端 / 工具定义 / 工具实现 / MCP 客户端 / 主循环
+七文件结构（demo2 六文件 + MCP 客户端层）：
+    agent.py     主入口：客户端 + ReAct 主循环（本地/MCP 统一分发）+ REPL
+    tools.py     工具层（demo1 四件套，本地）
+    mcp.py       MCP 客户端层：握手 / 发现 / 调用，Server 不可用时降级仅本地
+    render.py    渲染层（demo2 版：分色 + cache 统计 + user 回放）
+    memory.py    记忆层（demo2 版减自动压缩：MEMORY.md / 手动 compact / caching）
+    session.py   会话层：memory/<会话ID>.jsonl 持久化 + /resume
+    commands.py  命令层：/help /status /tools /memory /resume /new /compact /quit
 
 启动顺序：
     1. 先启动 MCP Server：  python mcp_server.py
-    2. 再启动 Agent：       python agent.py
+    2. 再启动 Agent：       python -X utf8 agent.py
 """
 
 import os
-import subprocess
-from typing import Optional
 
-import requests
 from anthropic import Anthropic
 
+from tools import TOOLS, AVAILABLE_FUNCTIONS
+import mcp
+from memory import (
+    MEMORY_FILE, MEMORY_WINDOW_LINES, USE_CACHE_CONTROL,
+    build_system_prompt, build_system_param, review_memory,
+)
+import session
+from render import (
+    print_banner, print_cache_stats, print_divider, print_error,
+    print_markdown, print_messages, print_stop_reason, print_step,
+    read_user_input,
+)
+from commands import SessionState, handle_command
+
 
 # ============================================================
-# Part 1: 配置 + LLM 客户端初始化
+# Part 1: 配置 + LLM 客户端初始化（同 demo2）
 # ============================================================
-# 网关、模型、超时均写死，用户只需配置 API Key（两种方式）：
-#   1. 直接修改下面的 API_KEY
-#   2. 都没设 → 运行时交互式提示输入（不持久化，每次都要重输）
+# 网关、模型、超时均写死。API Key 两种获取方式（按优先级）：
+#   1. 环境变量 ANTHROPIC_API_KEY（优先级最高，可持久化）
+#   2. 未设环境变量 → 运行时交互式提示输入（仅本次有效，不持久化）
 # 默认走智谱 BigModel 的 Anthropic 兼容网关 + glm-5.2 模型。
-
-# ↓↓↓ 只需改这一行 ↓↓↓
-API_KEY = ""
 
 # 默认配置（一般无需修改）
 BASE_URL       = "https://open.bigmodel.cn/api/anthropic"   # 智谱 BigModel Anthropic 兼容网关
 MODEL          = "glm-5.2"                                  # 模型名
 API_TIMEOUT_MS = 3000000                                    # 单次请求超时（毫秒），3000000ms = 50 分钟
 
-# MCP Server 地址（对应 mcp_server.py 默认监听）
-MCP_URL = "http://127.0.0.1:8888/mcp"
+# 思考模式开关（默认关闭）：开启后模型每轮先推理再决策，✻ thinking 随回复展示
+USE_THINKING           = False
+THINKING_BUDGET_TOKENS = 2000   # 思考预算（计入 max_tokens，开启时输出上限抬到 8000）
 
 
 def load_config() -> dict:
-    """环境变量优先于代码默认值（仅 API_KEY 走环境变量有用）"""
+    """API Key 只从环境变量读（不存在代码内常量）"""
     return {
-        "api_key":       os.environ.get("ANTHROPIC_API_KEY") or API_KEY,
+        "api_key":       os.environ.get("ANTHROPIC_API_KEY") or "",
         "base_url":      BASE_URL,
         "model":         MODEL,
         "timeout_ms":    API_TIMEOUT_MS,
@@ -64,7 +81,7 @@ def ensure_config() -> dict:
 
     print("=" * 60)
     print("检测到尚未配置 API Key，请输入（仅本次运行有效）")
-    print("如需持久化：请改 agent.py 顶部的 API_KEY 变量")
+    print("如需持久化：请设置环境变量 ANTHROPIC_API_KEY")
     print("=" * 60)
 
     api_key = input("\n请输入 API Key: ").strip()
@@ -75,8 +92,10 @@ def ensure_config() -> dict:
     return config
 
 
-# 模块级占位：实际使用前由 __main__ 调用 init_client() 初始化
+# 模块级占位：实际使用前由 __main__ 初始化
 client: Anthropic = None  # type: ignore
+ALL_TOOLS: list = []      # 本地 + MCP 合并后的工具 schema（main 启动时赋值）
+MCP_CLIENT = None         # MCP 客户端实例（main 启动时赋值）
 
 
 def init_client() -> None:
@@ -93,449 +112,170 @@ def init_client() -> None:
 
 
 # ============================================================
-# Part 2: 工具定义（同 demo1 base）
+# Part 2: 统一工具分发 + Agent 主循环
 # ============================================================
-# 每次请求随 tools 参数一起发给大模型，相当于一份「工具说明书」。
-# 大模型拿到说明书后就知道自己有哪些本地能力，但真正的执行发生在本地代码里。
-#
-# demo1 的 4 个工具保留不变（含 edit）；demo3 新增的是 MCP 协议（见 Part 4）。
+# 与 demo2 的核心区别：
+#   - 工具集从 4 个本地扩展到 4 本地 + N MCP（N 由 server 决定）
+#   - 工具调用统一分发：本地工具名走函数调用，其他走 MCP RPC——
+#     LLM 视角下本地 / MCP 无差异（schema 两端一致，直接 + 拼接合并）
+#   - 无自动压缩（demo3 刻意去掉阈值检查，压缩只由 /compact 手动发起）
 
-TOOLS = [
-    {
-        "name": "execute_bash",
-        "description": "执行任意 shell 命令，可用于文件操作、系统命令等",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "要执行的 shell 命令",
-                }
-            },
-            "required": ["command"],
-        },
-    },
-    {
-        "name": "read_file",
-        "description": "读取指定路径文件内容，返回文本",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "要读取的文件路径",
-                }
-            },
-            "required": ["path"],
-        },
-    },
-    {
-        "name": "write_file",
-        "description": "写入文件，不存在则创建，存在则覆盖",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "要写入的文件路径"},
-                "content": {"type": "string", "description": "要写入的内容"},
-            },
-            "required": ["path", "content"],
-        },
-    },
-    {
-        "name": "edit",
-        "description": (
-            "精确替换文件中的一段文本（string replacement）。"
-            "比 write_file 整文件覆写更精细，适合改一行 / 改一个值。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path":        {"type": "string",  "description": "要编辑的文件路径"},
-                "old":         {"type": "string",  "description": "要替换的原文本（必须精确匹配，含空格/缩进）"},
-                "new":         {"type": "string",  "description": "替换为的新文本"},
-                "replace_all": {"type": "boolean", "description": "是否替换全部匹配处（默认 false，只替换第一处）"},
-            },
-            "required": ["path", "old", "new"],
-        },
-    },
-]
+MAX_ITERATIONS = 30  # 防止大模型陷入死循环
 
 
-# ============================================================
-# Part 3: 本地工具实现 + 路由表
-# ============================================================
-# 每个工具是一个普通 Python 函数：
-#   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
-#   - 设置超时，防止死循环或长时间阻塞
-
-def execute_bash(command: str) -> str:
-    """执行 shell 命令"""
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
-            errors="replace",
-            timeout=60,            # 防止死循环 / 长时间阻塞
-        )
-        output = []
-        if result.stdout:
-            output.append(result.stdout)
-        if result.stderr:
-            output.append(f"[stderr] {result.stderr}")
-        if result.returncode != 0:
-            output.append(f"[exit code: {result.returncode}]")
-        return "\n".join(output) if output else "[命令执行成功，无输出]"
-    except subprocess.TimeoutExpired:
-        return "[错误] 命令执行超时（60 秒）"
-    except Exception as e:
-        return f"[错误] 命令执行失败: {e}"
-
-
-def read_file(path: str) -> str:
-    """读取文件内容"""
-    try:
-        if not os.path.exists(path):
-            return f"[错误] 文件不存在: {path}"
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        max_length = 20000
-        if len(content) > max_length:
-            content = content[:max_length] + f"\n\n... [内容已截断，共 {len(content)} 字符]"
-        return content
-    except UnicodeDecodeError:
-        return "[错误] 文件不是有效的文本文件或编码不支持"
-    except Exception as e:
-        return f"[错误] 读取文件失败: {e}"
-
-
-def write_file(path: str, content: str) -> str:
-    """写入文件"""
-    try:
-        dir_path = os.path.dirname(path)
-        if dir_path and not os.path.exists(dir_path):
-            os.makedirs(dir_path, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        return f"[成功] 文件已写入: {path} ({len(content)} 字符)"
-    except Exception as e:
-        return f"[错误] 写入文件失败: {e}"
-
-
-def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
-    """精确替换文件中的文本。
-
-    与 write_file 的核心区别：
-        - write_file：发整文件内容 → 重写整文件
-        - edit：只发 old + new 两段 → 在原文件上做 string replacement
-    """
-    try:
-        if not os.path.exists(path):
-            return f"[错误] 文件不存在: {path}"
-        if not old:
-            return "[错误] old 不能为空字符串（会无限匹配）"
-
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        occurrences = content.count(old)
-        if occurrences == 0:
-            return f"[错误] 未在 {path} 中找到要替换的文本。请用 read_file 确认精确内容（含空格/缩进）。"
-
-        if replace_all:
-            new_content = content.replace(old, new)
-            which = f"全部 {occurrences} 处"
-        else:
-            new_content = content.replace(old, new, 1)
-            which = f"第 1 处（共 {occurrences} 处匹配，未替换的可用 replace_all=true）"
-
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-
-        return (
-            f"[成功] {path} 替换 {which}；"
-            f"文件 {len(content)} → {len(new_content)} 字符"
-        )
-    except Exception as e:
-        return f"[错误] edit 失败: {e}"
-
-
-# 路由表：工具名 → 实际函数（调度核心）
-# 当大模型说「我要调用 execute_bash」时，Agent 通过这张表把名字映射到具体函数并执行。
-# 注：MCP 工具不在此表——Part 5 的 _dispatch_tool 统一分发时，本地工具走此表，其它走 MCP。
-AVAILABLE_FUNCTIONS = {
-    "execute_bash": execute_bash,
-    "read_file":    read_file,
-    "write_file":   write_file,
-    "edit":         edit,
-}
-
-
-# ============================================================
-# Part 4: MCP 客户端（demo3 核心新增之一）
-# ============================================================
-# 一个最小的 MCP client：所有调用都通过 JSON-RPC 2.0 over HTTP。
-#
-# 本 demo 只实现 MCP 的 tools 能力，涉及三个主要 method：
-#   - initialize : 握手 + 协议版本协商
-#   - tools/list : 拿到 server 端的完整工具 schema 列表
-#   - tools/call : 按名字 + arguments 调用具体工具，返回 content 包装的结果
-#
-# MCP 的本质：**工具的能力边界从「同一进程的函数调用」
-#             扩展到「跨进程 / 跨机器的 RPC 调用」**。
-# 工具不需要被 Agent 进程 import，可以是任何语言写的、跑在任何地方的独立服务。
-
-class MCPClient:
-    def __init__(self, url: str):
-        self.url = url
-        self._id = 0
-        self.initialized = False
-
-    def _next_id(self) -> int:
-        self._id += 1
-        return self._id
-
-    def send(self, method: str, params: Optional[dict] = None) -> dict:
-        """发送 JSON-RPC 2.0 请求并返回 result 字段。失败抛 RuntimeError。"""
-        payload = {
-            "jsonrpc": "2.0",
-            "id":      self._next_id(),
-            "method":  method,
-            "params":  params or {},
-        }
-        try:
-            resp = requests.post(self.url, json=payload, timeout=30)
-        except requests.RequestException as e:
-            raise RuntimeError(f"MCP 网络错误 ({method}): {e}") from e
-
-        if resp.status_code != 200:
-            raise RuntimeError(f"MCP HTTP {resp.status_code} ({method}): {resp.text[:200]}")
-
-        data = resp.json()
-        if "error" in data:
-            err = data["error"]
-            raise RuntimeError(f"MCP 调用失败 ({method}): {err}")
-
-        return data.get("result", {})
-
-    def initialize(self) -> dict:
-        """握手：协议版本协商 + 拿 server 能力声明。"""
-        result = self.send("initialize", {
-            "protocolVersion": "2024-11-05",
-            "capabilities":    {},
-            "clientInfo":      {"name": "demo3-tools-agent", "version": "1.0.0"},
-        })
-        self.initialized = True
-        return result
-
-    def list_tools(self) -> list:
-        """发现工具：返回 server 端完整工具 schema 列表。"""
-        result = self.send("tools/list", {})
-        return result.get("tools", [])
-
-    def call_tool(self, name: str, arguments: dict) -> str:
-        """调用工具：按 name + arguments 执行，提取 content[].text 拼接后返回。"""
-        result = self.send("tools/call", {"name": name, "arguments": arguments})
-        content = result.get("content", [])
-        texts = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                texts.append(block.get("text", ""))
-        return "\n".join(texts) if texts else "[MCP 工具无文本返回]"
-
-
-# ============================================================
-# Part 5: Agent 主循环（ReAct + 本地/MCP 统一分发）
-# ============================================================
-# 与 demo1 的核心区别：
-#   - 工具集从 3 个本地扩展到 4 本地 + N MCP（N 由 server 决定）
-#   - 工具调用通过统一分发，LLM 视角下本地/MCP 无差异
-#
-# 工具合并：两端 schema 格式一致（都用 input_schema），直接 + 拼接即可。
-# 工具分发：本地工具名走函数调用，其他走 MCP RPC。
-
-MAX_ITERATIONS = 30
-
-
-def _preview(text, limit: int = 60) -> str:
-    text = str(text).replace("\n", " ").strip()
-    return text[:limit] + ("..." if len(text) > limit else "")
-
-
-def _print_messages(messages: list) -> None:
-    print(f"[messages] 当前 {len(messages)} 条消息")
-    for i, msg in enumerate(messages):
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            parts = []
-            for block in content:
-                if isinstance(block, dict):
-                    if block.get("type") == "text":
-                        parts.append(block.get("text", ""))
-                    elif block.get("type") == "tool_use":
-                        parts.append(f"[调用工具 {block.get('name')}]")
-                    elif block.get("type") == "tool_result":
-                        parts.append(str(block.get("content", ""))[:100])
-                else:
-                    t = getattr(block, "type", None)
-                    if t == "text":
-                        parts.append(getattr(block, "text", ""))
-                    elif t == "tool_use":
-                        parts.append(f"[调用工具 {getattr(block, 'name', '')}]")
-            content = "\n".join(parts)
-        print(f"  [{i}] {msg.get('role', '?'):<9}: {_preview(content)}")
-    print()
-
-
-def _dispatch_tool(
-    name: str,
-    args: dict,
-    mcp_client: MCPClient,
-    verbose: bool,
-) -> str:
+def _dispatch_tool(name: str, args: dict) -> str:
     """统一工具分发：本地 or MCP。LLM 不需要知道工具在哪，只按名字调用。"""
     if name in AVAILABLE_FUNCTIONS:
-        if verbose:
-            print(f"  [工具 · 本地] {name}({_preview(str(args), 80)})")
         try:
             return str(AVAILABLE_FUNCTIONS[name](**args))
         except Exception as e:
             return f"[错误] 本地工具 {name} 执行失败: {e}"
 
     # 不在本地 → 走 MCP
-    if verbose:
-        print(f"  [工具 · MCP]  {name}({_preview(str(args), 80)})")
     try:
-        return mcp_client.call_tool(name, args)
+        return MCP_CLIENT.call_tool(name, args)
     except Exception as e:
         return f"[错误] MCP 工具 {name} 调用失败: {e}"
 
 
-def run_agent(
-    user_input: str,
-    all_tools: list,
-    mcp_client: MCPClient,
-    verbose: bool = True,
-) -> str:
-    """ReAct 主循环（同 demo1，工具集扩展为本地 + MCP）。"""
-    messages = [{"role": "user", "content": user_input}]
-    system_prompt = "你是一个有用的助手，可以通过工具与系统交互，帮助用户完成任务。"
+def run_agent(user_input: str, history: list, verbose: bool = True):
+    """
+    在会话历史上跑一轮 ReAct（history 就地追加；工具统一走本地/MCP 分发）。
+
+    Returns:
+        (最终回复, 本轮新增消息列表)
+    """
+    # 1. 构建 system prompt（含项目级记忆）+ 转 cache_control blocks
+    system_prompt = build_system_prompt(verbose=verbose)
+    system_param = build_system_param(system_prompt)
+
+    # 2. ReAct 循环（在会话历史上追加）
+    new_messages = []
+
+    user_msg = {"role": "user", "content": user_input}
+    history.append(user_msg)
+    new_messages.append(user_msg)
 
     for loop_idx in range(1, MAX_ITERATIONS + 1):
         if verbose:
-            print(f"\n----- ReAct 第 {loop_idx} 轮 -----")
-            _print_messages(messages)
+            print_divider(f"第 {loop_idx} 轮 ReAct")
+            print_messages(history)
 
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=4096,
-            system=system_prompt,
-            tools=all_tools,
-            messages=messages,
-        )
+        # 2a. 决策：调 LLM（system 走 cache_control，工具集 = 本地 + MCP）
+        create_kwargs = {
+            "model": MODEL,
+            # 思考预算计入 max_tokens，开启 thinking 时须抬高输出上限
+            "max_tokens": 8000 if USE_THINKING else 4096,
+            "system": system_param,
+            "tools": ALL_TOOLS,
+            "messages": history,
+        }
+        if USE_THINKING:
+            create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET_TOKENS}
+        response = client.messages.create(**create_kwargs)
 
         if verbose:
-            print(f"[LLM 决策] stop_reason = {response.stop_reason}")
+            print_stop_reason(response.stop_reason)
             for block in response.content:
-                if block.type == "text":
-                    print(f"  - text     : {_preview(block.text, 80)}")
+                if block.type == "thinking":
+                    print_step("thinking", block.thinking, limit=80)
+                elif block.type == "text":
+                    print_step("assistant", block.text, limit=80)
                 elif block.type == "tool_use":
-                    print(f"  - tool_use : {block.name}({block.input})")
+                    print_step("tool_call", f"{block.name}({block.input})")
+            print_cache_stats(response.usage, use_cache_control=True)
 
+        # 2b. 判停（最终回复也落进会话历史）
         if response.stop_reason != "tool_use":
             if verbose:
-                print(f"[任务结束] 大模型判断完成")
-            return "".join(b.text for b in response.content if b.type == "text")
+                print_divider("任务完成")
+            result = "".join(b.text for b in response.content if b.type == "text")
+            final_msg = {"role": "assistant", "content": response.content}
+            history.append(final_msg)
+            new_messages.append(final_msg)
+            break
 
-        messages.append({"role": "assistant", "content": response.content})
+        # 2c. 行动 + 感知（统一分发：本地函数 or MCP RPC）
+        assistant_msg = {"role": "assistant", "content": response.content}
+        history.append(assistant_msg)
 
         tool_results = []
         for block in response.content:
-            if block.type == "tool_use":
-                result = _dispatch_tool(
-                    block.name,
-                    block.input or {},
-                    mcp_client,
-                    verbose,
-                )
-                if verbose:
-                    print(f"  [结果] {_preview(result, 200)}")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result,
-                })
+            if block.type != "tool_use":
+                continue
+            result = _dispatch_tool(block.name, block.input or {})
+            if verbose:
+                print_step("tool_return", result, limit=200)
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result,
+            })
 
-        messages.append({"role": "user", "content": tool_results})
+        results_msg = {"role": "user", "content": tool_results}
+        history.append(results_msg)
+        new_messages.extend([assistant_msg, results_msg])
+    else:
+        result = "[错误] 超过最大循环次数"
 
-    return "[错误] 超过最大循环次数"
+    return result, new_messages
 
 
 # ============================================================
 # 交互式入口
 # ============================================================
 
-def main():
+if __name__ == "__main__":
     init_client()
 
-    print("=" * 60)
-    print("Demo3-tools Agent 已启动（工具扩展轴）")
-    print(f"模型:   {MODEL}")
-    print(f"网关:   {BASE_URL}")
-    print(f"MCP:    {MCP_URL}")
-    print("=" * 60)
+    # MCP 握手 + 发现工具（Server 不可用时降级为仅本地）
+    MCP_CLIENT, mcp_tools = mcp.discover()
 
-    # ---- MCP 握手 + 发现工具 ----
-    mcp_client = MCPClient(MCP_URL)
-    mcp_tools = []
-    try:
-        info = mcp_client.initialize()
-        print(f"[MCP] 握手成功：{info.get('serverInfo', {})} 协议版本 {info.get('protocolVersion')}")
-        mcp_tools = mcp_client.list_tools()
-        print(f"[MCP] 发现 {len(mcp_tools)} 个远程工具：{', '.join(t['name'] for t in mcp_tools)}")
-    except Exception as e:
-        print(f"[MCP] 连接失败，降级为仅本地工具模式。原因: {e}")
-        print(f"[MCP] 请确认已在另一个终端运行：python mcp_server.py")
+    # 合并工具（schema 统一，直接拼接）
+    ALL_TOOLS = TOOLS + mcp_tools
+    print(f"[Tools] 合并后共 {len(ALL_TOOLS)} 个工具：{', '.join(t['name'] for t in ALL_TOOLS)}")
 
-    # ---- 合并工具（schema 统一，直接拼接）----
-    all_tools = TOOLS + mcp_tools
-    print(f"[Tools] 合并后共 {len(all_tools)} 个工具：{', '.join(t['name'] for t in all_tools)}")
-
-    print("\n命令:   /tools 查看工具 / quit 退出")
-    print("=" * 60)
+    state = SessionState(
+        model=MODEL,
+        base_url=BASE_URL,
+        client=client,
+        session_id=session.new_session_id(),
+        tools=ALL_TOOLS,
+        extra_lines=[
+            f"MCP:    {mcp.MCP_URL}",
+            f"工具:   {len(ALL_TOOLS)} 个（本地 {len(TOOLS)} + MCP {len(mcp_tools)}）",
+            f"项目记忆: {MEMORY_FILE}（窗口 {MEMORY_WINDOW_LINES} 行）",
+            "压缩:   仅手动 /compact（无自动压缩）",
+            f"缓存:   cache_control={'on' if USE_CACHE_CONTROL else 'off'}",
+        ],
+    )
+    print_banner("Demo3 Agent 已启动（工具扩展轴）", [
+        f"模型:   {MODEL}",
+        f"网关:   {BASE_URL}",
+        *state.extra_lines,
+        "命令:   /help 查看命令，/tools 看工具，/quit 退出",
+    ])
 
     while True:
-        try:
-            user_input = input("\n用户: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print("\n再见！")
+        user_input = read_user_input()
+        if user_input is None:
+            print("再见！")
             break
 
         if not user_input:
             continue
-        if user_input.lower() in {"quit", "exit", "q"}:
-            print("再见！")
-            break
 
-        if user_input.lower() in {"/tools", "/t"}:
-            print(f"\n--- 当前 {len(all_tools)} 个工具 ---")
-            for t in all_tools:
-                src = "本地" if t["name"] in AVAILABLE_FUNCTIONS else "MCP"
-                print(f"  [{src}] {t['name']}: {t.get('description', '')[:60]}")
+        action = handle_command(user_input, state)
+        if action == "break":
+            break
+        if action == "continue":
             continue
 
         try:
-            final = run_agent(
-                user_input=user_input,
-                all_tools=all_tools,
-                mcp_client=mcp_client,
-                verbose=True,
-            )
-            print(f"\n助手: {final}")
+            final, new_msgs = run_agent(user_input, state.history, verbose=True)
+            session.append_messages(state.session_id, new_msgs)
+            print_markdown(final)
+            # 任务结束回顾一次记忆：提醒模型判断有没有值得持久的事实，不强制写
+            review_memory(state.history, client, MODEL, verbose=True)
         except Exception as e:
-            print(f"\n[错误] {e}")
-
-
-if __name__ == "__main__":
-    main()
+            print_error(f"[错误] {e}")
