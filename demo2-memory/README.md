@@ -77,7 +77,7 @@ python -X utf8 agent.py
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `MEMORY_WINDOW_LINES` | 50 | MEMORY.md 加载进 system prompt 的行数上限（自主维护应保持精炼，此为防膨胀保险丝） |
+| `MEMORY_WINDOW_LINES` | 50 | MEMORY.md 加载进 system prompt 的行数上限（自主维护应保持精炼，此为防止上下文无限增长） |
 | `COMPACT_THRESHOLD_MESSAGES` | 12 | messages 条数达此阈值触发 compact_messages |
 | `COMPACT_KEEP_RECENT` | 4 | compact 时保留最近 N 条原始消息 |
 | `USE_CACHE_CONTROL` | True | 是否启用 prompt caching；某些兼容网关不支持时可关掉 |

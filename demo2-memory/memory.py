@@ -31,12 +31,15 @@ import os
 
 # --- 跨会话记忆（项目级，存 memory/ 目录，模型自主维护） ---
 MEMORY_FILE         = os.path.join("memory", "MEMORY.md")  # 项目级记忆文件（模型维护）
-MEMORY_WINDOW_LINES = 50                 # 防膨胀保险丝：加载时最多取最后 N 行
+MEMORY_WINDOW_LINES = 50                 # 防止上下文无限增长：最多取最后 N 行
 
 # --- 动态压缩 ---
 # 压缩触发阈值（消息条数）。生产级按 token 占比触发（见总览第八节）。
 COMPACT_THRESHOLD_MESSAGES = 12  # 演示用低阈值，方便短任务就触发一次压缩
 COMPACT_KEEP_RECENT        = 4   # 压缩时保留最近 N 条原始消息
+
+# --- 任务结束记忆回顾 ---
+REVIEW_TAIL_MESSAGES = 10  # 回顾时带给模型的会话末尾条数（控制成本）
 
 # --- Prompt caching ---
 # 某些 Anthropic 兼容网关不实现 cache_control 后端，
@@ -56,7 +59,7 @@ BASE_PROMPT = (
 
 def load_memory() -> str:
     """
-    加载记忆文件（模型自主维护：正常应保持精炼，最后 N 行是防膨胀保险丝）。
+    加载记忆文件（模型自主维护：正常应保持精炼，最后 N 行是防止上下文无限增长）。
     第一次运行时文件不存在 → 返回空字符串。
     """
     if not os.path.exists(MEMORY_FILE):
@@ -96,11 +99,64 @@ def build_system_prompt(verbose: bool = False) -> str:
                 if line.strip():
                     print(f"   {line}")
         else:
-            print(f"[记忆] {MEMORY_FILE} 为空或不存在（首次运行）")
+            print(f"[记忆] 无跨会话记忆（{MEMORY_FILE} 为空或不存在——首次运行，或还没有值得记住的事实）")
 
     if not memory.strip():
         return BASE_PROMPT + MEMORY_GUIDANCE
     return BASE_PROMPT + "\n\n## 跨会话记忆（memory/MEMORY.md）\n\n" + memory + MEMORY_GUIDANCE
+
+
+def review_memory(history: list, client, model: str, verbose: bool = False) -> None:
+    """
+    任务结束的「记忆回顾」：给模型一次机会判断本次对话有没有值得跨会话
+    记住的持久事实——有就让它自己用 write_file / edit 更新 MEMORY.md，
+    没有就直接结束。不强制：写不写由模型判断（对应指引「没有值得记的，
+    就不用写」）。
+
+    这是纯靠对话中自发写入之外的一道兜底：重要事实即使模型当场没想起来
+    写，任务收尾时也会被再问一次。带 REVIEW_TAIL_MESSAGES 条会话末尾做
+    上下文，最多跑 3 轮（写一次 + 确认，足够）。
+    """
+    if not history:
+        return
+    from tools import TOOLS, AVAILABLE_FUNCTIONS  # 延迟导入，避免层次纠缠
+
+    messages = [dict(m) for m in history[-REVIEW_TAIL_MESSAGES:]]
+    messages.append({"role": "user", "content": (
+        "任务已结束。请回顾以上对话：是否出现了值得跨会话记住的持久事实"
+        "（用户偏好、项目约定、关键结论）？"
+        "有就用 write_file / edit 更新 memory/MEMORY.md（只记事实、保持精炼）；"
+        "没有就直接回答「无需更新」，不要为了写而写。"
+    )})
+
+    updated = False
+    for _ in range(3):
+        response = client.messages.create(
+            model=model,
+            max_tokens=1024,
+            system=build_system_prompt(),
+            tools=TOOLS,
+            messages=messages,
+        )
+        if response.stop_reason != "tool_use":
+            break
+        messages.append({"role": "assistant", "content": response.content})
+        tool_results = []
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+            if block.name in ("write_file", "edit"):
+                updated = True
+            fn = AVAILABLE_FUNCTIONS.get(block.name)
+            result = str(fn(**(block.input or {}))) if fn else f"[错误] 未知工具: {block.name}"
+            tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result})
+        messages.append({"role": "user", "content": tool_results})
+
+    if verbose:
+        if updated:
+            print(f"[记忆] 任务结束回顾：已更新 {MEMORY_FILE}")
+        else:
+            print("[记忆] 任务结束回顾：无需更新")
 
 
 # ============================================================

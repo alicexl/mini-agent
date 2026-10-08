@@ -30,7 +30,7 @@ from tools import TOOLS, AVAILABLE_FUNCTIONS
 from memory import (
     MEMORY_FILE, MEMORY_WINDOW_LINES, COMPACT_THRESHOLD_MESSAGES,
     COMPACT_KEEP_RECENT, USE_CACHE_CONTROL,
-    build_system_prompt, build_system_param, compact_messages,
+    build_system_prompt, build_system_param, compact_messages, review_memory,
 )
 import session
 from render import (
@@ -113,7 +113,7 @@ def init_client() -> None:
 # ============================================================
 # 与 demo1 的核心区别：
 #   - system prompt = 基础 + MEMORY.md 内容 + 维护指引，走 cache_control
-#   - 主循环在每个任务开始前检查水位，到阈值先 compact 再开工
+#   - 主循环在 run_agent 循环前查阈值，到了先 compact 再开工
 #   - 跨会话记忆由模型在对话中用 write_file / edit 自主维护（无自动落盘）
 #   - 会话历史落盘 memory/<会话ID>.jsonl，支持 /resume
 #   - 每轮打印 cache 命中统计（创建 vs 命中）
@@ -123,7 +123,7 @@ MAX_ITERATIONS = 30  # 防止大模型陷入死循环
 
 def run_agent(user_input: str, history: list, verbose: bool = True):
     """
-    在活会话历史上跑一轮 ReAct（history 就地追加；压缩由主循环在任务开始前做）。
+    在活会话历史上跑一轮 ReAct（history 就地追加；压缩由主循环在 run_agent 循环前做）。
 
     流程：
         1. 加载项目级记忆（MEMORY.md）→ 构建 system prompt（含维护指引）
@@ -263,7 +263,7 @@ if __name__ == "__main__":
         if action == "continue":
             continue
 
-        # 任务开始前检查水位：上个任务/恢复的会话攒下的消息到阈值，先压缩再开工。
+        # run_agent 循环前查阈值：上个任务/恢复的会话攒下的消息到阈值，先压缩再开工。
         # 压缩即重写（内存怎么变，文件就怎么写）；run_agent 期间纯追加，结束批量落盘。
         if len(state.history) >= COMPACT_THRESHOLD_MESSAGES:
             state.history[:] = compact_messages(list(state.history), client, MODEL, verbose=True)
@@ -274,5 +274,7 @@ if __name__ == "__main__":
             final, new_msgs = run_agent(user_input, state.history, verbose=True)
             session.append_messages(state.session_id, new_msgs)
             print_markdown(final)
+            # 任务结束回顾一次记忆：提醒模型判断有没有值得持久的事实，不强制写
+            review_memory(state.history, client, MODEL, verbose=True)
         except Exception as e:
             print_error(f"[错误] {e}")
