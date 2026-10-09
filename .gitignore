@@ -24,3 +24,10 @@ Thumbs.db
 *.m4a
 *.mp3
 *.wav
+# 大文件 / 录音不进 git
+*.m4a
+*.mp3
+*.wav
+
+# 口播转写（本地工作产物）
+*_transcript_*.txt
