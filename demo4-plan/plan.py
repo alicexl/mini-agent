@@ -21,6 +21,8 @@ PLAN_TOOL = {
         "任务规划——仅在复杂的多步任务开头调用一次，列出步骤。"
         "**使用时机**：3 步以上、多工具协作、步骤间有依赖的任务。"
         "简单的一两步任务直接 execute_bash / read_file，不要用 plan。"
+        "**列完步骤后**：若需求还有未定事项，先用 read_file 探索、"
+        "ask_user_question 澄清，再开始执行。"
     ),
     "input_schema": {
         "type": "object",

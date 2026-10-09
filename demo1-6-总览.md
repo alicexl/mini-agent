@@ -53,7 +53,7 @@
 | **Prompt caching** | demo2 | `cache_control` breakpoint + 5/60min TTL，长 prompt 不爆成本 |
 | **会话持久化**（/resume） | demo2 | `memory/<会话ID>.jsonl` 一行一条只追加；重启后 `/resume` 扫目录恢复——模型无状态，「会话」只是每次请求带上的 messages 数组 |
 | **MCP**（外部工具协议） | demo3 | client-server + JSON-RPC 风格 round-trip，挂外部 server |
-| **Plan 模式**（自动决策） | demo4 | LLM 自判复杂度调 plan 列步骤（一次性：调后从 tools 移除）；TodoWrite 风格 step 列表 |
+| **Plan 模式**（自动决策） | demo4 | LLM 自判复杂度调 plan 列步骤（一次性：调后从 tools 移除）——Claude Code Plan Mode 的教学最简版 |
 | **Skill** | demo4 | skills/*.md 工作流模板，元信息常驻 system prompt，正文经 use_skill 按需拉取（渐进式披露） |
 | **Subagent**（一次性） | demo5 | 独立 context、无状态、结束即销毁；适合**相互独立**的子任务 |
 | **Team**（持久 + 消息队列） | demo5 | 独立累积 messages + 消息队列 + `[send:]` 路由；适合**需多角色分工协作**的任务 |
@@ -194,7 +194,7 @@ demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以�
 - demo1 §3 — 统计 .py 文件数 + 写 count.txt（3 轮 ReAct）
 - demo2 §5 — 案例 1（统计 .py 文件，3 轮 ReAct + caching 命中）+ 案例 2（5 步串行任务，7 轮 ReAct + compact 触发）
 - demo3 §7 — MCP 远程调用 + edit 精细修改对照
-- demo4 §6 — Plan 自动决策 + Skill 匹配触发
+- demo4 §5 — ask 主动提问 + plan 自动决策（含 plan×ask 联动）+ Skill 匹配触发
 - demo5 §2 / §3 — Subagent 派发独立任务 / Team 跑通多角色团队协作
 - demo6 §2 / §3 — Permission deny 拦截 + Hook Pre/Post 回调
 

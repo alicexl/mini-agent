@@ -112,6 +112,9 @@ def ask_user_question(questions) -> str:
     if _is_tty():
         try:
             answers = _Picker(norm).run()
+        except KeyboardInterrupt:
+            print("[ask] 已取消")
+            answers = None
         except Exception as e:
             print(f"[ask] 方向键 UI 异常（{e}），降级为文本输入")
             answers = _ask_plain(norm)
@@ -255,11 +258,18 @@ def _run_picker(questions):
         else:
             st.answers[st.qi] = st.opts()[st.oi]["label"]
         st.advance()
+        if st.done:                                # 最后一题答完 → 结束（即 Submit）
+            event.app.exit()
 
-    @kb.add("escape", filter=~Condition(lambda: st.custom))
-    def _esc(event):
+    def _cancel(event):
         st.cancelled = True
         st.done = True
+        event.app.exit()                           # 取消并结束
+
+    # 取消键逐个单独注册：escape 与普通键塞进同一个 kb.add 时，Escape 的
+    # 序列解析（Alt 组合键机制）会把同注册的其他键吞掉
+    kb.add("escape", filter=~Condition(lambda: st.custom))(_cancel)
+    kb.add("c-c", filter=~Condition(lambda: st.custom))(_cancel)
 
     # 自定义输入模式：Enter 提交文本，Esc 返回选项列表
     buf_kb = KeyBindings()
@@ -273,9 +283,16 @@ def _run_picker(questions):
             st.custom = False
             event.app.layout.focus(opt_window)
             st.advance()
+            if st.done:                            # 自定义输入答完最后一题 → 结束
+                event.app.exit()
 
     @buf_kb.add("escape")
     def _buf_esc(event):
+        if not st.custom:              # 焦点异常落在 buffer 时，Esc 仍取消并退出
+            st.cancelled = True
+            st.done = True
+            event.app.exit()
+            return
         buf.reset()
         st.custom = False
         event.app.layout.focus(opt_window)
@@ -283,7 +300,8 @@ def _run_picker(questions):
     def chips():
         frags = [("class:arrow", "← "),]
         for i, q in enumerate(questions):
-            mark = "✔" if st.answers[i] is not None else ("❯" if i == st.qi else "□")
+            # ✔ 已答 / ❯ 当前 / 未答无标记（灰色）——□ 与多选勾选框撞符号，不用
+            mark = "✔" if st.answers[i] is not None else ("❯" if i == st.qi else "")
             cls = "class:chip-done" if st.answers[i] is not None else (
                 "class:chip-cur" if i == st.qi else "class:chip-todo")
             frags.append((cls, f" {mark} {q['header']} "))
@@ -313,7 +331,7 @@ def _run_picker(questions):
 
     opt_window = Window(FormattedTextControl(
         lambda: chips() + question_line() + option_lines() + footer,
-        key_bindings=kb, show_cursor=False), wrap_lines=True)
+        focusable=True, show_cursor=False), wrap_lines=True)   # focusable：启动焦点落它
     buf_window = Window(BufferControl(buffer=buf, key_bindings=buf_kb))
 
     style = Style.from_dict({
@@ -333,7 +351,11 @@ def _run_picker(questions):
             ConditionalContainer(buf_window, filter=Condition(lambda: st.custom)),
         ])),
         style=style,
-        full_screen=False,
+        full_screen=False,  # 内联渲染（对齐 Claude Code）：在对话流下方弹出；
+                            # 若左右切换时出现宽字符重绘错位，可换 full_screen=True 或 ASCII 符号
+        erase_when_done=True,  # 退出时擦掉渲染区域——提交/取消后界面消失，不留在滚动历史里
+        key_bindings=kb,    # 应用级绑定：不依赖窗口焦点——opt 控件不可聚焦时按键也生效
+                            # （buffer 聚焦时其自身绑定优先，Enter/Esc 走自定义输入路径）
     )
     app.layout.focus(opt_window)
     app.run()

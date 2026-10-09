@@ -121,6 +121,7 @@ def init_client() -> None:
 #   - 工具集 = 本地四件套 + plan/use_skill/ask_user_question（规划轴三件）
 #   - system prompt = 记忆层产出 + Skills 元信息段 + 提问指引
 #   - plan 一致性：复杂任务 LLM 先列步骤（调一次后从 tools 移除，列完就放手）；
+#     探索/提问澄清靠 plan 工具描述的 prompt 引导（不裁写工具，教学最简版）；
 #     ask_user_question 常驻（任务中途拿不准也能问）——与 plan 的一次性形成对照
 
 MAX_ITERATIONS = 30  # 防止大模型陷入死循环
