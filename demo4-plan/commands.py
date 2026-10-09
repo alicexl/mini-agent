@@ -70,12 +70,12 @@ def _cmd_tools(state: SessionState) -> bool:
 
 def _cmd_skills(state: SessionState) -> bool:
     """查看已加载的 Skills。"""
-    import plan
-    if not plan._SKILLS:
-        console.print(f"[dim](未在 {plan.SKILLS_DIR} 找到任何 .md 文件)[/]\n")
+    import skill
+    if not skill._SKILLS:
+        console.print(f"[dim](未在 {skill.SKILLS_DIR} 找到任何 .md 文件)[/]\n")
         return True
-    console.print(f"\n[dim]--- 已加载 {len(plan._SKILLS)} 个 Skills ---[/]")
-    for name, info in plan._SKILLS.items():
+    console.print(f"\n[dim]--- 已加载 {len(skill._SKILLS)} 个 Skills ---[/]")
+    for name, info in skill._SKILLS.items():
         console.print(f"[cyan]{name}[/]: {info['description']}")
         console.print(f"  [dim]触发词: {', '.join(info['triggers'])}[/]")
     console.print()

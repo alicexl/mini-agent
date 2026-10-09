@@ -18,7 +18,8 @@
 |---|---|
 | `agent.py` | 主入口：客户端 + ReAct 主循环（工具合并 + plan 调用后移除）+ REPL |
 | `tools.py` | 工具层（demo1 四件套，本地） |
-| `plan.py` | **规划层**：plan 工具 + Skill 加载器 + use_skill（渐进式披露） |
+| `plan.py` | **规划层**：plan 工具（LLM 自判复杂度，调后从 tools 移除） |
+| `skill.py` | **Skill 层**：Skill 加载器 + use_skill（渐进式披露） |
 | `ask.py` | **提问层**：ask_user_question 方向键 UI + 非 TTY 降级（对齐 Claude Code 的 AskUserQuestion） |
 | `render.py` | 渲染层（demo2 版：分色 + cache 统计 + user 回放） |
 | `memory.py` | 记忆层（demo2 版减自动压缩） |
@@ -31,7 +32,7 @@
 
 ### 与 demo2 的差异
 
-- **新增 `plan.py`**（规划层）+ **`ask.py`**（提问层）：规划轴的两个新机制
+- **新增 `plan.py`**（规划层）+ **`skill.py`**（Skill 层）+ **`ask.py`**（提问层）：规划轴的三个新机制
 - **无自动压缩**（同 demo3）：压缩只由 `/compact` 手动发起
 
 ### plan：一次性规划

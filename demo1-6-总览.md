@@ -149,13 +149,13 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 | demo1 | `demo1-react/agent.py`（+ `agent_single.py` 原始单文件版；拆出 `tools.py` / `render.py`） | — | `demo1-react/讲稿.md` |
 | demo2 | `demo2-memory/agent.py`（+ `tools.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `memory/` 双层记忆目录（运行时生成：MEMORY.md + 会话 jsonl） | `demo2-memory/讲稿.md` |
 | demo3 | `demo3-tools/agent.py`（+ `tools.py` / `mcp.py` / `render.py` / `memory.py` / `session.py` / `commands.py`）+ `mcp_server.py` | `memory/` 双层记忆目录（继承 demo2） | `demo3-tools/讲稿.md` |
-| demo4 | `demo4-plan/agent.py`（+ `tools.py` / `plan.py` / `ask.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（示例 Skill） | `demo4-plan/讲稿.md` |
+| demo4 | `demo4-plan/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（示例 Skill） | `demo4-plan/讲稿.md` |
 | **demo5** ✅ | `demo5-multiagent/agent_sub.py` + `demo5-multiagent/agent_team.py` | —（两份 agent 入口，一份讲稿对照讲） | `demo5-multiagent/讲稿.md` |
 | demo6 | `demo6-safety/agent.py` | —（两层 Control Plane 全在 agent.py 单文件内） | `demo6-safety/讲稿.md` |
 
 > 每个目录下还有一份 `README.md`——精简的**设计方案 + 运行说明**（安装/配置/启动命令），深度讲解看 `讲稿.md`。
 
-> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环；demo3-6 迁移前各自内部的 Part 细分略有不同）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2 / demo3 / demo4 已迁移**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `ask.py` 提问层，继承 demo2 记忆能力但无自动压缩）；demo5-6 迁移前暂保持单文件。
+> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环；demo3-6 迁移前各自内部的 Part 细分略有不同）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2 / demo3 / demo4 已迁移**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `skill.py` Skill 层 + `ask.py` 提问层，继承 demo2 记忆能力但无自动压缩）；demo5-6 迁移前暂保持单文件。
 
 ### demo5 的特殊结构
 

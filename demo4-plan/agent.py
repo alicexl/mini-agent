@@ -6,15 +6,16 @@ Demo4 - 规划轴的 Agent
 公式：demo4 = base × 规划
 
     × plan（plan.py：当前任务的规划——LLM 自判复杂度，复杂任务开头列一次步骤）
-    × Skill（plan.py：skills/*.md 可复用工作流，元信息常驻 + 正文按需加载）
+    × Skill（skill.py：skills/*.md 可复用工作流，元信息常驻 + 正文按需加载）
     × ask_user_question（ask.py：需求有歧义时主动向用户提问，对齐 Claude Code）
     × 继承 demo2 全部记忆能力（会话持久化 / MEMORY.md / caching）
     × 手动压缩（/compact；同 demo3：无自动压缩阈值）
 
-八文件结构（demo2 六文件 + 规划层 + 提问层）：
+九文件结构（demo2 六文件 + 规划层 + Skill 层 + 提问层）：
     agent.py     主入口：客户端 + ReAct 主循环（工具合并 + plan 一致性）+ REPL
     tools.py     工具层（demo1 四件套，本地）
-    plan.py      规划层：plan 工具 + Skill 加载器 + use_skill（demo4 新增）
+    plan.py      规划层：plan 工具（demo4 新增）
+    skill.py     Skill 层：Skill 加载器 + use_skill（demo4 新增）
     ask.py       提问层：ask_user_question 方向键 UI + 非 TTY 降级（demo4 新增）
     render.py    渲染层（demo2 版：分色 + cache 统计 + user 回放）
     memory.py    记忆层（demo2 版减自动压缩）
@@ -31,6 +32,7 @@ from anthropic import Anthropic
 
 from tools import TOOLS as BASE_TOOLS, AVAILABLE_FUNCTIONS as BASE_FUNCTIONS
 import plan
+import skill
 import ask
 from memory import (
     MEMORY_FILE, MEMORY_WINDOW_LINES, USE_CACHE_CONTROL,
@@ -129,11 +131,11 @@ def build_system_prompt_full(verbose: bool = False) -> str:
     组装完整 system prompt（四层叠加）：
         1. 基础（身份 + 工具 + 工作流程）        —— memory.py BASE_PROMPT
         2. 跨会话记忆（MEMORY.md 内容 + 维护指引）—— memory.py
-        3. 可用 Skills 元信息（不含 body）        —— plan.py（渐进式披露）
+        3. 可用 Skills 元信息（不含 body）        —— skill.py（渐进式披露）
         4. 提问指引（什么时候该问用户）           —— ask.py
     """
     sp = build_system_prompt(verbose=verbose)
-    sp += plan.build_skill_metadata_section()
+    sp += skill.build_skill_metadata_section()
     sp += ask.ASK_GUIDANCE
     return sp
 
@@ -247,20 +249,20 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
 if __name__ == "__main__":
     init_client()
 
-    # 工具合并：本地四件套 + 规划层三件（schema 格式一致，直接拼接）
-    ALL_TOOLS = BASE_TOOLS + plan.PLAN_TOOLS + [ask.ASK_TOOL]
-    AVAILABLE_FUNCTIONS = {**BASE_FUNCTIONS, **plan.PLAN_FUNCTIONS,
+    # 工具合并：本地四件套 + 规划轴三件（schema 格式一致，直接拼接）
+    ALL_TOOLS = BASE_TOOLS + plan.PLAN_TOOLS + skill.SKILL_TOOLS + [ask.ASK_TOOL]
+    AVAILABLE_FUNCTIONS = {**BASE_FUNCTIONS, **plan.PLAN_FUNCTIONS, **skill.SKILL_FUNCTIONS,
                            "ask_user_question": ask.ask_user_question}
 
-    # 启动时加载 Skills（plan.py 模块级 _SKILLS，use_skill 运行时读取）
-    plan._SKILLS = plan.load_skills()
-    if plan._SKILLS:
-        print(f"[Skills] 加载 {len(plan._SKILLS)} 个：")
-        for name, info in plan._SKILLS.items():
+    # 启动时加载 Skills（skill.py 模块级 _SKILLS，use_skill 运行时读取）
+    skill._SKILLS = skill.load_skills()
+    if skill._SKILLS:
+        print(f"[Skills] 加载 {len(skill._SKILLS)} 个：")
+        for name, info in skill._SKILLS.items():
             print(f"  - {name}: {info['description'][:60]}")
             print(f"    触发词: {', '.join(info['triggers'])}")
     else:
-        print(f"[Skills] 未在 {plan.SKILLS_DIR} 找到任何 .md 文件（Agent 仍可运行）")
+        print(f"[Skills] 未在 {skill.SKILLS_DIR} 找到任何 .md 文件（Agent 仍可运行）")
 
     print(f"\n[Tools] 共 {len(ALL_TOOLS)} 个本地工具："
           f"{', '.join(t['name'] for t in ALL_TOOLS)}")
@@ -273,7 +275,7 @@ if __name__ == "__main__":
         tools=ALL_TOOLS,
         extra_lines=[
             f"工具:   {len(ALL_TOOLS)} 个（四件套 + plan/use_skill/ask_user_question）",
-            f"Skills: {len(plan._SKILLS)} 个（元信息常驻，正文按需加载）",
+            f"Skills: {len(skill._SKILLS)} 个（元信息常驻，正文按需加载）",
             f"项目记忆: {MEMORY_FILE}（窗口 {MEMORY_WINDOW_LINES} 行）",
             "压缩:   仅手动 /compact（无自动压缩）",
             f"缓存:   cache_control={'on' if USE_CACHE_CONTROL else 'off'}",
