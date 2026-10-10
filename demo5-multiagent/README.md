@@ -1,7 +1,7 @@
 # Demo5 — 多 Agent 轴
 
 > 在 demo4（base × 规划）基础上叠加多 Agent 轴——**subagent（独立子任务分包：派一次性 Subagent 在后台执行，独立 context，完成通知带回最终报告）** + **jobs（后台任务机制：shell/agent 两种 job 共用注册表，日志落盘 + `<task-notification>` 通知注入，对齐 Claude Code）**。继承规划轴三件（plan / Skill / ask_user_question，全部自包含）+ 记忆能力（无自动压缩，同 demo3/4）。底座取舍判据：**自包含的机制照带，依赖外部服务的机制不带**（demo3 的 MCP 依赖模拟 server，不带）。
-> 拓展视野：多 Agent 的另一条路线 Team（AutoGen/CrewAI 范式）只在讲稿第 4 章提一句，代码不实现——Claude Code 没有 Team 模式，它的多 Agent 能力全部是 Subagent 形态。
+> 拓展视野：共享上下文的 Fork agent 变体在讲稿里讲机制、代码不实现——demo5 只实现独立 context 的 Task 同款。
 
 ## 文档导航
 

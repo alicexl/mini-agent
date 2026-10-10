@@ -56,7 +56,6 @@
 | **Plan 模式**（自动决策） | demo4 | LLM 自判复杂度调 plan 列步骤（一次性：调后从 tools 移除）——Claude Code Plan Mode 的教学最简版 |
 | **Skill** | demo4 | skills/*.md 工作流模板，元信息常驻 system prompt，正文经 use_skill 按需拉取（渐进式披露） |
 | **Subagent**（后台一次性） | demo5 | 独立 context、后台执行、完成通知带回报告；适合**相互独立**的子任务 |
-| **Team**（持久 + 消息队列） | demo5（讲稿提及，无代码） | AutoGen / CrewAI 范式：持久角色 + 消息队列 + `[send:]` 路由；**Claude Code 无此模式** |
 | **Permission** | demo6 | allow/deny/ask 规则匹配（如 `Bash(rm:*)`），工具调用前的访问控制 |
 | **Hook** | demo6 | PreToolUse / PostToolUse 事件回调（agent.py 内函数：Pre 可拦/改 input，Post 可改/补 output） |
 
@@ -75,13 +74,12 @@ demo5  = base × 多 Agent        （Subagent 独立 context 分包）
 demo6  = base × 约束            （Permission 规则 + Hook 回调）
 ```
 
-### 视角 B：三种"拆任务"机制对比
+### 视角 B：两种"拆任务"机制对比
 
 | 机制 | 出现的 demo | messages | 适合 |
 |---|---|---|---|
 | **Plan**（step 列表） | demo4 | 所有 step **共享**一份 | 后续 step 要用前面 step 的结果（有依赖） |
 | **Subagent**（后台一次性） | demo5 `subagent.py` | 每个 Subagent **独立**一份 context，后台执行、完成通知带回报告 | 多个**相互独立**的子任务 |
-| **Team**（持久 Agent） | demo5（讲稿提及，无代码） | 每个 Agent **独立累积** + 消息队列路由 | 需多角色分工协作的任务（AutoGen / CrewAI 范式） |
 
 ### 视角 C：能力 vs 约束
 
@@ -159,7 +157,7 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 
 ### demo5 的定位
 
-demo5 只实现 **Subagent**（一次性外包，对应 Claude Code 的 Task tool / Cursor 的 agent / Devin 的子任务派发）。多 Agent 的另一条路线 **Team**（持久角色 + 消息队列 + `[send:]` 路由，AutoGen / CrewAI 范式）**代码不实现**，讲稿第 4 章作视野拓展提一句——Claude Code 没有 Team 模式，它的多 Agent 能力全部是 Subagent 形态。
+demo5 只实现 **Subagent**（一次性外包，对应 Claude Code 的 Task tool / Cursor 的 agent / Devin 的子任务派发）。共享上下文的 **Fork agent** 变体在讲稿第 2 章讲机制、代码不实现。
 
 ---
 
@@ -179,7 +177,7 @@ demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以�
 | 记忆系统 / 上下文管理 | demo2（短期 + 长期 + 压缩 + caching） |
 | 工具扩展 / MCP | demo3 |
 | 规划 / Skills | demo4 |
-| 多 Agent 系统 | demo5（Subagent；Team 讲稿提及） |
+| 多 Agent 系统 | demo5（Subagent） |
 | Agent 安全 | demo6（两层 Control Plane） |
 
 ### 路径 3：看真实运行
