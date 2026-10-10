@@ -156,6 +156,9 @@ class JobRegistry:
         if job is None or job.status != "running":
             return False
         job.status = "killed"
+        # job_kill 的 tool_return 已把终态告知模型（kill 是唯一能确定"模型已知道"
+        # 的路径——调用就是模型发的），标记已通知，不再触发 WAKEUP 补一轮纯确认
+        job.notified = True
         job._stop_event.set()          # agent job：协作式停止（循环每轮检查）
         if job._kill_func:             # shell job：终止进程树
             job._kill_func()

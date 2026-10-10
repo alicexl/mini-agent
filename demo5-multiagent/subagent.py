@@ -11,7 +11,7 @@ Demo5 多 Agent 层 — Subagent（多 Agent 轴的核心）
                     messages / system / tools（主/子同构，demo5 的关键设计）
 
 多 Agent 轴的全部代码长在本文件：subagent 工具定义 + 实现 + 共用循环。
-主循环（agent.py）也 import 这里的 run_react_loop 跑 depth=0 的顶层循环。
+主循环（agent.py）也 import 这里的 run_react_loop 跑顶层循环。
 
 模块级 client / MODEL / ALL_TOOLS / FUNCTIONS 由 agent.py 启动时注入
 （与 agent.py 的模块级 client 同款模式）：subagent() 需要全量工具做裁剪。
@@ -85,7 +85,6 @@ def subagent(role: str, task: str) -> str:
             tools=tools,
             local_fns=FUNCTIONS,
             system=sub_system_prompt,   # 纯字符串（网关兼容）；主循环才走 cache_control blocks
-            depth=1,
             verbose=False,              # 子循环不打印终端——细节全写日志，终端只留主 Agent
             log_file=log_file,
             stop_event=job._stop_event,
@@ -107,21 +106,19 @@ def run_react_loop(
     tools: list,
     local_fns: dict,
     system,
-    depth: int,
     verbose: bool,
     log_file=None,
     stop_event=None,
 ) -> str:
     """
-    通用 ReAct 循环——主 Agent（depth=0）和 Subagent（depth=1+）共用。
+    通用 ReAct 循环——主 Agent 和 Subagent 共用。
 
     Args:
         messages:      该循环专属的 messages（主 / 子各自独立）
         tools:         本循环 LLM 能看到的工具列表
         local_fns:     本循环可调用的本地函数字典
         system:        本循环的 system 参数（主循环传 cache_control blocks，子循环传纯字符串）
-        depth:         当前的嵌套深度（主 Agent = 0，Subagent = 1+）
-        verbose:       是否打印轨迹到终端（子循环 False——细节只写日志）
+        verbose:       是否打印轨迹到终端（主循环 True；子循环 False——细节只写日志）
         log_file:      子循环传入的日志文件——关键步骤始终落盘（agent job 留档可查）
         stop_event:    子循环传入的停止标志——job_kill 协作式终止（每轮检查）
     """
@@ -135,7 +132,7 @@ def run_react_loop(
         turn_round += 1
         if turn_round > MAX_ITERATIONS:
             return f"[错误] ReAct 循环未在 {MAX_ITERATIONS} 轮内完成"
-        if depth == 0:
+        if verbose:
             global _MAIN_ROUND
             _MAIN_ROUND += 1
             round_no = _MAIN_ROUND   # 主 Agent：会话内连续计数（通知汇报轮接着数）
@@ -146,8 +143,7 @@ def run_react_loop(
             return "[已终止]"
 
         if verbose:
-            depth_label = f"（depth={depth}）" if depth > 0 else ""
-            print_divider(f"第 {round_no} 轮 ReAct{depth_label}")
+            print_divider(f"第 {round_no} 轮 ReAct")
 
         create_kwargs = {
             "model": MODEL,

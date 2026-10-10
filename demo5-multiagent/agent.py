@@ -14,7 +14,7 @@ Demo5 - 多 Agent 轴的 Agent
     × 手动压缩（/compact；同 demo3/4：无自动压缩阈值）
 
 十二文件结构（demo4 九文件 + 多 Agent 层 + 后台任务层 + TUI 层）：
-    agent.py     主入口：客户端 + 主循环（depth=0 调 subagent.run_react_loop）+ 轮询循环
+    agent.py     主入口：客户端 + 主循环（调 subagent.run_react_loop）+ 轮询循环
     tools.py     工具层（demo1 四件套，execute_bash 加 run_in_background）
     plan.py      规划层：plan 工具（继承 demo4）
     skill.py     Skill 层：Skill 加载器 + use_skill（继承 demo4）
@@ -130,7 +130,7 @@ def init_client() -> None:
 
 
 # ============================================================
-# Part 2: Agent 主循环（depth=0 的共用 ReAct 循环）
+# Part 2: Agent 主循环（共用 ReAct 循环）
 # ============================================================
 # 与 demo2 的核心区别：
 #   - 工具集 = 本地四件套 + subagent（多 Agent 轴）
@@ -139,7 +139,7 @@ def init_client() -> None:
 
 def run_agent(user_input: str, history: list, verbose: bool = True):
     """
-    在会话历史上跑一轮 ReAct（主循环，depth=0 调共用循环）。
+    在会话历史上跑一轮 ReAct（主循环调共用循环）。
 
     通知注入：已完成的 job 结果在每次请求前搭车注入 messages（工作时通知）。
     user_input 为空串时不再追加用户消息（空闲唤醒的汇报轮走这条路）。
@@ -166,7 +166,6 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
         tools=list(ALL_TOOLS),   # 传副本——plan 调用后移除不能误改全量工具集
         local_fns=AVAILABLE_FUNCTIONS,
         system=system_param,
-        depth=0,
         verbose=verbose,
     )
 

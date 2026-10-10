@@ -15,7 +15,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `agent.py` | 主入口：客户端 + 主循环（depth=0 调 `subagent.run_react_loop`）+ 通知注入 + 交互入口 |
+| `agent.py` | 主入口：客户端 + 主循环（调 `subagent.run_react_loop`）+ 通知注入 + 交互入口 |
 | `tools.py` | 工具层（demo1 四件套；execute_bash 加 `run_in_background` 参数） |
 | `plan.py` | 规划层：plan 工具（继承 demo4） |
 | `skill.py` | Skill 层：Skill 加载器 + use_skill（继承 demo4） |
@@ -77,6 +77,7 @@ python -X utf8 agent.py
 
 - **后台命令**：输入「跑一下 python -c "import time; time.sleep(20); print('BUILD SUCCESS')"，结束后告诉我输出了什么」——LLM 自动判断耗时命令放后台，派完即回，完成后通知自动触发汇报（不用 sleep 命令——Windows cmd 没有）
 - **Subagent**：输入「帮我做三件事，每件都派一个专门的 Subagent 完成：1) 统计当前目录下每个 py 文件的行数，找出行数最多的一个；2) 写一个脚本计算斐波那契数列第 20 项并运行；3) 查询北京明天的天气并给出穿衣建议」——主 Agent 并行派 3 个后台 Subagent（嵌套轨迹 + 日志落盘），完成后三条通知注入、自动汇总
+- **job_kill 强杀**：先输入「跑一下 python -c "import time; time.sleep(300)"，放后台就行，不用等它」，等 job 派出后再输入「这个不用跑了，停掉吧」——job_kill 走 taskkill 杀整棵进程树；tool_return 即终态送达（kill 标记 notified，不触发唤醒轮）
 
 > **管道自动跑**：`printf '任务\n/quit\n' | python -X utf8 agent.py`
 
