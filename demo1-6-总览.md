@@ -24,7 +24,7 @@
             │
             ▼
        多 Agent（demo5）
-   Subagent + Team
+   Subagent
 ```
 
 **每个 demo 拆一条正交的能力轴**，公式不链式叠加，而是 `demo(N) = base × 轴N`——base 就是 demo1（ReAct 心跳），后续每个 demo 在 base 上独立加一条轴。读者可以按任意顺序学 demo2-6。
@@ -35,7 +35,7 @@
 | **demo2** | 记忆 | `base × 记忆` | 给它**长期记忆 + 动态压缩** | 重启就忘（会话不持久）；messages 会话内无限增长，撑爆上下文窗口、烧 token |
 | **demo3** | 工具 | `base × 工具扩展` | 给它**更多手脚 + 远程工具箱** | 工具只有 read/write/bash/edit；想接外部协议 |
 | **demo4** | 规划 | `base × 规划` | 给它**纸笔 + 套路手册** | 走一步看一步容易跑偏；常见任务每次重新想 |
-| **demo5** | 多 Agent | `base × 多 Agent` | 给它**一次性助手 + 项目团队** | 单 Agent 上下文膨胀；不能外包/协作独立子任务 |
+| **demo5** | 多 Agent | `base × 多 Agent` | 给它**一次性助手** | 单 Agent 上下文膨胀；独立子任务无法外包隔离 |
 | **demo6** | 约束 | `base × 约束` | 给它**手脚的安全防护** | 工具太自由（`rm -rf /`、`dd of=/dev/sda`），且安全逻辑硬编码不可配置 |
 
 ---
@@ -55,8 +55,8 @@
 | **MCP**（外部工具协议） | demo3 | client-server + JSON-RPC 风格 round-trip，挂外部 server |
 | **Plan 模式**（自动决策） | demo4 | LLM 自判复杂度调 plan 列步骤（一次性：调后从 tools 移除）——Claude Code Plan Mode 的教学最简版 |
 | **Skill** | demo4 | skills/*.md 工作流模板，元信息常驻 system prompt，正文经 use_skill 按需拉取（渐进式披露） |
-| **Subagent**（一次性） | demo5 | 独立 context、无状态、结束即销毁；适合**相互独立**的子任务 |
-| **Team**（持久 + 消息队列） | demo5 | 独立累积 messages + 消息队列 + `[send:]` 路由；适合**需多角色分工协作**的任务 |
+| **Subagent**（后台一次性） | demo5 | 独立 context、后台执行、完成通知带回报告；适合**相互独立**的子任务 |
+| **Team**（持久 + 消息队列） | demo5（讲稿提及，无代码） | AutoGen / CrewAI 范式：持久角色 + 消息队列 + `[send:]` 路由；**Claude Code 无此模式** |
 | **Permission** | demo6 | allow/deny/ask 规则匹配（如 `Bash(rm:*)`），工具调用前的访问控制 |
 | **Hook** | demo6 | PreToolUse / PostToolUse 事件回调（agent.py 内函数：Pre 可拦/改 input，Post 可改/补 output） |
 
@@ -71,7 +71,7 @@ demo1  base = LLM × 工具 × 循环 × 状态
 demo2  = base × 记忆            （短期 messages + 长期文件 + compact + caching）
 demo3  = base × 工具扩展        （MCP 外部工具协议）
 demo4  = base × 规划            （手动 Plan + 自动 Plan + Skill 预消化）
-demo5  = base × 多 Agent        （Subagent 一次性 + Team 持久 + 消息队列）
+demo5  = base × 多 Agent        （Subagent 独立 context 分包）
 demo6  = base × 约束            （Permission 规则 + Hook 回调）
 ```
 
@@ -80,8 +80,8 @@ demo6  = base × 约束            （Permission 规则 + Hook 回调）
 | 机制 | 出现的 demo | messages | 适合 |
 |---|---|---|---|
 | **Plan**（step 列表） | demo4 | 所有 step **共享**一份 | 后续 step 要用前面 step 的结果（有依赖） |
-| **Subagent**（一次性） | demo5 `agent_sub.py` | 每个 Subagent **独立**一份，结束即销毁 | 多个**相互独立**的子任务 |
-| **Team**（持久 Agent） | demo5 `agent_team.py` | 每个 Agent **独立累积** + 消息队列路由 | 需多角色分工协作的任务 |
+| **Subagent**（后台一次性） | demo5 `subagent.py` | 每个 Subagent **独立**一份 context，后台执行、完成通知带回报告 | 多个**相互独立**的子任务 |
+| **Team**（持久 Agent） | demo5（讲稿提及，无代码） | 每个 Agent **独立累积** + 消息队列路由 | 需多角色分工协作的任务（AutoGen / CrewAI 范式） |
 
 ### 视角 C：能力 vs 约束
 
@@ -150,21 +150,16 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 | demo2 | `demo2-memory/agent.py`（+ `tools.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `memory/` 双层记忆目录（运行时生成：MEMORY.md + 会话 jsonl） | `demo2-memory/讲稿.md` |
 | demo3 | `demo3-tools/agent.py`（+ `tools.py` / `mcp.py` / `render.py` / `memory.py` / `session.py` / `commands.py`）+ `mcp_server.py` | `memory/` 双层记忆目录（继承 demo2） | `demo3-tools/讲稿.md` |
 | demo4 | `demo4-plan/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（示例 Skill） | `demo4-plan/讲稿.md` |
-| **demo5** ✅ | `demo5-multiagent/agent_sub.py` + `demo5-multiagent/agent_team.py` | —（两份 agent 入口，一份讲稿对照讲） | `demo5-multiagent/讲稿.md` |
+| demo5 | `demo5-multiagent/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `subagent.py` / `jobs.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（继承 demo4） | `demo5-multiagent/讲稿.md` |
 | demo6 | `demo6-safety/agent.py` | —（两层 Control Plane 全在 agent.py 单文件内） | `demo6-safety/讲稿.md` |
 
 > 每个目录下还有一份 `README.md`——精简的**设计方案 + 运行说明**（安装/配置/启动命令），深度讲解看 `讲稿.md`。
 
-> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环；demo3-6 迁移前各自内部的 Part 细分略有不同）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2 / demo3 / demo4 已迁移**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `skill.py` Skill 层 + `ask.py` 提问层，继承 demo2 记忆能力但无自动压缩）；demo5-6 迁移前暂保持单文件。
+> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2 / demo3 / demo4 / demo5 已迁移**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `skill.py` Skill 层 + `ask.py` 提问层；demo5 加 `subagent.py` 多 Agent 层（后台执行 + 完成通知）+ `jobs.py` 后台任务层（shell/agent job 共用注册表、日志落盘、通知注入），基于 demo4 底座（规划轴三件 + 记忆全继承、无自动压缩；demo3 的 MCP 依赖模拟 server 不带））；demo6 迁移前暂保持单文件。
 
-### demo5 的特殊结构
+### demo5 的定位
 
-demo5 一个目录下有**两个 agent.py**：
-
-- **`agent_sub.py`**（主线）：Subagent 一次性分工。代码精简（独立 context、无状态、结束即销毁），讲稿权重 70%。对应 Claude Code 的 Task tool / Cursor 的 agent / Devin 的子任务派发。
-- **`agent_team.py`**（实战案例）：多角色团队协作——LLM 拆角色 + 消息队列 + `[send: 成员名]` 路由 + Agent 持久 `self.messages`。讲稿权重 30%，定位为「Subagent 在需要多角色协作/任务流转时的升级版」，对应 AutoGen / CrewAI 范式。
-
-讲稿先用 agent_sub.py 演示一次性 Subagent 的能力边界，再用 agent_team.py 演示持久对象 + 消息队列如何让任务在角色间流转——两种多 Agent 范式的对照。
+demo5 只实现 **Subagent**（一次性外包，对应 Claude Code 的 Task tool / Cursor 的 agent / Devin 的子任务派发）。多 Agent 的另一条路线 **Team**（持久角色 + 消息队列 + `[send:]` 路由，AutoGen / CrewAI 范式）**代码不实现**，讲稿第 4 章作视野拓展提一句——Claude Code 没有 Team 模式，它的多 Agent 能力全部是 Subagent 形态。
 
 ---
 
@@ -184,7 +179,7 @@ demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以�
 | 记忆系统 / 上下文管理 | demo2（短期 + 长期 + 压缩 + caching） |
 | 工具扩展 / MCP | demo3 |
 | 规划 / Skills | demo4 |
-| 多 Agent 系统 | demo5（Subagent + Team 对照） |
+| 多 Agent 系统 | demo5（Subagent；Team 讲稿提及） |
 | Agent 安全 | demo6（两层 Control Plane） |
 
 ### 路径 3：看真实运行
@@ -195,7 +190,7 @@ demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以�
 - demo2 §5 — 案例 1（统计 .py 文件，3 轮 ReAct + caching 命中）+ 案例 2（5 步串行任务，7 轮 ReAct + compact 触发）
 - demo3 §7 — MCP 远程调用 + edit 精细修改对照
 - demo4 §5 — ask 主动提问 + plan 自动决策（含 plan×ask 联动）+ Skill 匹配触发
-- demo5 §2 / §3 — Subagent 派发独立任务 / Team 跑通多角色团队协作
+- demo5 §3 — 耗时命令自动放后台 + Subagent 后台并行派发三个独立子任务
 - demo6 §2 / §3 — Permission deny 拦截 + Hook Pre/Post 回调
 
 ---
@@ -223,8 +218,8 @@ demo6: = base × 约束
 - 依赖：`anthropic` SDK（兼容网关）+ `rich` / `prompt_toolkit`（demo1/2 渲染层）+ `requests`（demo3 MCP Client）
 - **网关 / 模型**：所有 demo 默认走**智谱 BigModel 的 Anthropic 兼容网关**（`https://open.bigmodel.cn/api/anthropic`）+ `glm-5.2` 模型——接口与 Anthropic SDK 完全兼容，换官方 API 或别的兼容网关只需改 `BASE_URL` / `MODEL`
 - **API Key 配置**：
-  - **demo1–4（已迁移新结构）——两级回退**：环境变量 `ANTHROPIC_API_KEY` → 运行时交互式输入（代码内不再有 `API_KEY` 常量）
-  - **demo5-6（待迁移单文件版）——三级回退**：
+  - **demo1–5（已迁移新结构）——两级回退**：环境变量 `ANTHROPIC_API_KEY` → 运行时交互式输入（代码内不再有 `API_KEY` 常量）
+  - **demo6（待迁移单文件版）——三级回退**：
   1. 设环境变量 `ANTHROPIC_API_KEY`（优先级最高）
   2. 改 `agent.py` Part 1 顶部的 `API_KEY = ""`（持久化；env 未设时才生效）
   3. 都没设 → 首次运行时交互式输入（仅本次有效）

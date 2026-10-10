@@ -31,3 +31,5 @@ Thumbs.db
 
 # 口播转写（本地工作产物）
 *_transcript_*.txt
+demo5-multiagent/memory/
+demo5-multiagent/jobs/

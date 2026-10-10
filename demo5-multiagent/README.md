@@ -1,51 +1,57 @@
 # Demo5 — 多 Agent 轴
 
-> 在 demo1-react（base）上独立叠加「多 Agent 轴」：两条机制对照讲解——`agent_sub.py`（Subagent 一次性外包，70% 权重） + `agent_team.py`（Team 持久项目组，30% 权重）。
+> 在 demo4（base × 规划）基础上叠加多 Agent 轴——**subagent（独立子任务分包：派一次性 Subagent 在后台执行，独立 context，完成通知带回最终报告）** + **jobs（后台任务机制：shell/agent 两种 job 共用注册表，日志落盘 + `<task-notification>` 通知注入，对齐 Claude Code）**。继承规划轴三件（plan / Skill / ask_user_question，全部自包含）+ 记忆能力（无自动压缩，同 demo3/4）。底座取舍判据：**自包含的机制照带，依赖外部服务的机制不带**（demo3 的 MCP 依赖模拟 server，不带）。
+> 拓展视野：多 Agent 的另一条路线 Team（AutoGen/CrewAI 范式）只在讲稿第 4 章提一句，代码不实现——Claude Code 没有 Team 模式，它的多 Agent 能力全部是 Subagent 形态。
 
 ## 文档导航
 
-- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（4 章 + 附录）
-  1. demo5 干了什么（两条机制 Subagent + Team）
-  2. 机制一：Subagent（一次性外包）—— 共用 `_react_loop` + 递归防护 + 真实案例
-  3. 机制二：Team（持久项目组）—— Agent 持久对象 + 消息队列 + `[send:]` 路由
-  4. Subagent vs Team 对比与总结（对照表 + 终端截断 + 能力演进）
+- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（4 章）
+  1. 结论：demo5 比 demo2 多了什么
+  2. Subagent：独立子任务的分包（主/子同构 + Claude Code 对照 + Fork agent 谱系）
+  3. 真实演示案例
+  4. 总结 + 另一条多 Agent 路线
 
 ## 关键文件
 
 | 文件 | 说明 |
 |---|---|
-| `agent_sub.py` | Subagent 一次性外包（Part 1-4：客户端 / 工具定义（含 subagent）/ 工具实现 + 路由表 / 主循环 + Subagent 循环共用 `_react_loop`） |
-| `agent_team.py` | Team 持久项目组（Part 1-5：客户端 / 工具定义（含 get_weather + plan_team）/ 工具实现 + Team 基础设施（**Agent 类** + **Team 类** + 消息队列 + `[send:]` 路由）/ 主循环 / 交互式入口） |
-| `讲稿.md` | 教学讲稿（对照 Subagent vs Team） |
+| `agent.py` | 主入口：客户端 + 主循环（depth=0 调 `subagent.run_react_loop`）+ 通知注入 + 交互入口 |
+| `tools.py` | 工具层（demo1 四件套；execute_bash 加 `run_in_background` 参数） |
+| `plan.py` | 规划层：plan 工具（继承 demo4） |
+| `skill.py` | Skill 层：Skill 加载器 + use_skill（继承 demo4） |
+| `ask.py` | 提问层：ask_user_question 方向键 UI + 非 TTY 降级（继承 demo4） |
+| `subagent.py` | **多 Agent 层**：subagent 工具（后台执行）+ 主/子共用 ReAct 循环（demo5 新增） |
+| `jobs.py` | **后台任务层**：Job 注册表（shell / agent 两种）+ 日志 + 通知 + job_kill（demo5 新增） |
+| `tui.py` | **TUI 层**：全屏界面——日志区滚动 + 底部常驻输入框 + ask 弹层（demo5 新增，仅 TTY） |
+| `render.py` | 渲染层（demo2 版；TUI 模式下输出经重定向进日志区） |
+| `memory.py` | 记忆层（demo2 版减自动压缩） |
+| `session.py` | 会话层：`memory/<会话ID>.jsonl` 持久化 + `/resume` |
+| `commands.py` | 命令层：`/help` `/status` `/tools` `/skills` `/memory` `/resume` `/new` `/compact` `/quit`（/new 补 job 清理） |
+| `skills/review.md` | 示例 Skill——代码审查工作流（继承 demo4） |
+| `jobs/` | 运行时生成的后台任务日志目录（已 gitignore） |
+| `memory/` | 运行时生成的双层记忆目录（已 gitignore，同 demo2） |
 
 ## 设计要点
 
-### Subagent（agent_sub.py）
+### 与 demo4 的差异
 
-- demo1 的 4 件套（execute_bash / read_file / write_file / edit）保留不变
-- 新增 `subagent` 本地工具——主 Agent 遇到相互独立的子任务时派一个一次性 Subagent
-- **关键设计**：
-  - **独立 context**：Subagent 有自己的 messages，与主 Agent 完全隔离
-  - **无状态**：不注入 Rules / 不注入记忆
-  - **结束即销毁**：循环结束返回结果摘要，messages/prompt 全部丢弃
-  - **工具集去 subagent**：子循环看不到 subagent 工具，防无限递归
-- **共用 `_react_loop`**：主 Agent 和 Subagent 跑同一个 ReAct 循环，差别只在传入的 messages/tools/system_prompt 是否独立——这就是"独立性"的本质
-- **subagent 在路由表里**：和其它本地工具一样被 `_react_loop` 路由分发，唯一特殊逻辑在 `subagent()` 内部启动子循环时过滤自身防递归
+- **新增 `subagent.py`**（多 Agent 层）+ **新增 `jobs.py`**（后台任务层）+ **agent.py 微调**（工具合并为 9 个、通知注入 + 空闲等待汇报轮）+ **tools.py 微调**（run_in_background 参数）+ **render.py 微调**（indent 参数）
+- **无自动压缩**（同 demo3/4）：压缩只由 `/compact` 手动发起
 
-### Team（agent_team.py）
+### jobs：后台任务机制
 
-- demo1 的 4 件套保留不变；新增 `get_weather`（教学模拟天气数据，不联网）+ `plan_team` 本地工具——**不含 subagent 工具**，Team 的协调靠 Team 类的消息队列，不靠 LLM 递归调 subagent
-- **`plan_team` 工具**：LLM **只拆角色**（每个成员的 name + role），任务由用户原始输入整体驱动、传给第一个被唤醒的成员
-- **Agent 类**：持久化对象（对比 Subagent 的"一次性函数"）
-  - `self.name` / `self.role`：固定身份（Subagent 是临时拼角色）
-  - `self.messages`：长期记忆，跨多次 `chat()` 累积
-  - `self.system_prompt`：含完整团队名册 + 两条规则
-  - `chat(event)`：把收到的消息追加进 messages → 走 ReAct 循环（工具集去掉 plan_team 防递归）
-- **Team 类 4 个核心动作**：`recruit`（招募·只注册）/ `initialize`（初始化·registry 完整后统一构建 system_prompt）/ `send`（消息入队）/ `run`（事件循环）。recruit 与 initialize 拆成两阶段——保证拼 prompt 时团队名册一定完整，不在 `Agent.__init__` 里拼残缺名册
-- **`[send: 成员名]` 路由协议**：Agent 不能完成时，在回复里写 `[send: 合适的人]`，`Team.run` 用 `re.search` 扫描全文解析（兼容 LLM 不把标记写在开头，常先分析再转交）后转交目标成员——路由决策交 LLM，路由执行交协调器
-- **`plan_team` 是终端委派工具**：主 Agent 调用后，`run_agent` 直接 `return` 团队结果、不进下一轮——用控制流而非 prompt 保证主 Agent 不越权重做团队的活（subagent 不截断，因为派完还要汇总多个子结果）
-- **路由稳定性依赖模型能力**：成员「做完本职主动 `[send:]` 转交剩余」靠 LLM 自觉——指令遵循弱的模型（如 glm-5.2）偶尔断链（口头说"请查收"却不写标记），机制本身没错，更强模型会更稳
-- **随机起手**：`plan_team` 随机挑一个成员接收任务，不匹配则 `[send:]` 转交，用于展示任务在成员间流转
+- 耗时命令 / Subagent 一律可放后台：起进程（Popen）/ 线程不等它结束，立即返回 job id + 日志路径
+- 输出落盘 `jobs/<id>.log`——边跑边写，read_file 随时可查
+- 完成后 `<task-notification>` 通知注入下一次请求的 messages；输入等待为事件轮询——job 完成自动唤醒汇报，等待期间用户随时可聊（消息排队；TTY 用可取消的 prompt_async，管道用裸 input 线程）
+- `job_kill` 工具：shell job 终止进程树（taskkill /T），agent job 协作式停止
+- 退出 / /new 时清理全部运行中 job
+
+### Subagent：独立子任务分包（后台执行）
+
+- LLM 判断任务相互独立时，调 `subagent(role, task)` 派后台 Subagent（描述里写了正向触发 + 反向抑制）
+- **主/子同构**：主 Agent 与 Subagent 共用 `run_react_loop`，差别只在传入的 messages / system / tools
+- **工具集只有基础四件套**：plan / use_skill / ask / job_kill / subagent 全不给——防递归、独立干活不回头问用户
+- **Claude Code 对照**：对标 Task 工具；Fork agent（共享上下文变体）在讲稿里讲机制、代码不实现
 
 ## 运行
 
@@ -55,52 +61,31 @@
 pip install -r requirements.txt
 ```
 
-依赖清单（`anthropic`）。
+依赖：`anthropic` + `rich` + `prompt_toolkit`。
 
 ### 配置 API Key
 
-**推荐：环境变量**（避免 Key 进 git 历史）
+环境变量 `ANTHROPIC_API_KEY`（推荐，可持久化）；未设时启动交互式输入。
+
+### 启动 Agent
 
 ```bash
-# Git Bash
-export ANTHROPIC_API_KEY="你的智谱 BigModel Key"
-python agent_sub.py    # 或 python agent_team.py
+python -X utf8 agent.py
 ```
 
-或者改 `agent_sub.py` / `agent_team.py` Part 1 顶部的 `API_KEY = ""`（不推荐——会被 git track）。
+演示建议：
 
-默认走智谱 BigModel 的 Anthropic 兼容网关（`https://open.bigmodel.cn/api/anthropic`）+ `glm-5.2` 模型，换官方 API 或其他兼容网关只需改 `BASE_URL` / `MODEL`。
+- **后台命令**：输入「跑一下 python -c "import time; time.sleep(20); print('BUILD SUCCESS')"，结束后告诉我输出了什么」——LLM 自动判断耗时命令放后台，派完即回，完成后通知自动触发汇报（不用 sleep 命令——Windows cmd 没有）
+- **Subagent**：输入「帮我做三件事，每件都派一个专门的 Subagent 完成：1) 统计当前目录下每个 py 文件的行数，找出行数最多的一个；2) 写一个脚本计算斐波那契数列第 20 项并运行；3) 查询北京明天的天气并给出穿衣建议」——主 Agent 并行派 3 个后台 Subagent（嵌套轨迹 + 日志落盘），完成后三条通知注入、自动汇总
 
-### 启动 Subagent 演示
+> **管道自动跑**：`printf '任务\n/quit\n' | python -X utf8 agent.py`
 
-```bash
-python agent_sub.py
-```
+### 可调参数（`memory.py` 顶部，同 demo2/3/4）
 
-启动后进入交互模式。建议输入两个独立子任务：
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `MEMORY_WINDOW_LINES` | 50 | MEMORY.md 加载进 system prompt 的行数上限（防止上下文无限增长） |
+| `COMPACT_KEEP_RECENT` | 4 | `/compact` 时保留最近 N 条原始消息 |
+| `USE_CACHE_CONTROL` | True | 是否启用 prompt caching |
 
-```
-请完成下面两个相互独立的子任务：
-1) 统计 demo5-multiagent 目录下 .py 文件的数量
-2) 读 demo5-multiagent/agent_sub.py 文件第 1 行注释
-```
-
-观察主 Agent 派 2 个 Subagent——各自独立 messages、结束即销毁。
-
-### 启动 Team 演示
-
-```bash
-python agent_team.py
-```
-
-启动后输入任意需要多角色协作的任务（如 `用 Python 写一个猜数字小游戏并审查代码质量`），观察：
-- LLM 调 `plan_team` 拆出多个角色（name + role）
-- 消息队列启动、随机挑一个成员起手
-- `[send: 成员名]` 路由：起手成员转交给更合适的成员
-- Agent 持久 `self.messages`：被 `[send:]` 唤醒的成员带着自己的 context 工作
-
-`quit` / `exit` / `q` 退出。
-
-### 运行时产物
-
-- 无固定产物——Team 不自动落盘，最终结果由 `plan_team` 作为字符串返回主 Agent（若 LLM 在执行中调 `write_file` 则按其意愿产生文件）
+> 另有 `USE_THINKING` 思考模式开关（`subagent.py` 顶部，默认关闭）。
