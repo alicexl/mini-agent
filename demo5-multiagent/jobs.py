@@ -60,14 +60,23 @@ class Job:
     _stop_event: threading.Event = field(default_factory=threading.Event)
 
     def summary(self) -> str:
-        text = {  # status → 一句话总结
+        if self.kind == "agent":
+            # agent job 的 completed 只代表循环正常跑完——成败真相在报告（<result>）里，
+            # summary 用中性词，不说"执行成功"（任务可能被 Permission 拒绝后带伤完成）
+            text = {
+                "completed": "已完成",
+                "failed":    "执行失败",
+                "killed":    "已被终止",
+            }.get(self.status, "运行中")
+            return f"后台 Subagent「{self.description[:50]}」{text}"
+        text = {
             "completed": "执行成功",
             "failed":    "执行失败",
             "killed":    "已被终止",
         }.get(self.status, "运行中")
-        if self.returncode is not None and self.kind == "shell":
+        if self.returncode is not None:
             text += f"，exit code {self.returncode}"
-        return f"后台{('命令' if self.kind == 'shell' else ' Subagent')}「{self.description[:50]}」{text}"
+        return f"后台命令「{self.description[:50]}」{text}"
 
 
 class JobRegistry:

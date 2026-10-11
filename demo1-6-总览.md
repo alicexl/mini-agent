@@ -57,7 +57,7 @@
 | **Skill** | demo4 | skills/*.md 工作流模板，元信息常驻 system prompt，正文经 use_skill 按需拉取（渐进式披露） |
 | **Subagent**（后台一次性） | demo5 | 独立 context、后台执行、完成通知带回报告；适合**相互独立**的子任务 |
 | **Permission** | demo6 | allow/deny/ask 规则匹配（如 `Bash(rm:*)`），工具调用前的访问控制 |
-| **Hook** | demo6 | PreToolUse / PostToolUse 事件回调（agent.py 内函数：Pre 可拦/改 input，Post 可改/补 output） |
+| **Hook** | demo6 | PreToolUse / PostToolUse 事件回调（permission.py 内函数：Pre 可拦/改 input，Post 可改/补 output） |
 
 ---
 
@@ -148,12 +148,12 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 | demo2 | `demo2-memory/agent.py`（+ `tools.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `memory/` 双层记忆目录（运行时生成：MEMORY.md + 会话 jsonl） | `demo2-memory/讲稿.md` |
 | demo3 | `demo3-tools/agent.py`（+ `tools.py` / `mcp.py` / `render.py` / `memory.py` / `session.py` / `commands.py`）+ `mcp_server.py` | `memory/` 双层记忆目录（继承 demo2） | `demo3-tools/讲稿.md` |
 | demo4 | `demo4-plan/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（示例 Skill） | `demo4-plan/讲稿.md` |
-| demo5 | `demo5-multiagent/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `subagent.py` / `jobs.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（继承 demo4） | `demo5-multiagent/讲稿.md` |
-| demo6 | `demo6-safety/agent.py` | —（两层 Control Plane 全在 agent.py 单文件内） | `demo6-safety/讲稿.md` |
+| demo5 | `demo5-multiagent/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `subagent.py` / `jobs.py` / `tui.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（继承 demo4） | `demo5-multiagent/讲稿.md` |
+| demo6 | `demo6-safety/agent.py`（+ demo5 十二文件底座 + `permission.py` 约束层） | —（约束层全在 `permission.py`） | `demo6-safety/讲稿.md` |
 
 > 每个目录下还有一份 `README.md`——精简的**设计方案 + 运行说明**（安装/配置/启动命令），深度讲解看 `讲稿.md`。
 
-> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2 / demo3 / demo4 / demo5 已迁移**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `skill.py` Skill 层 + `ask.py` 提问层；demo5 加 `subagent.py` 多 Agent 层（后台执行 + 完成通知）+ `jobs.py` 后台任务层（shell/agent job 共用注册表、日志落盘、通知注入），基于 demo4 底座（规划轴三件 + 记忆全继承、无自动压缩；demo3 的 MCP 依赖模拟 server 不带））；demo6 迁移前暂保持单文件。
+> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2–6 全部已迁移多文件结构**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `skill.py` Skill 层 + `ask.py` 提问层；demo5 加 `subagent.py` 多 Agent 层（后台执行 + 完成通知）+ `jobs.py` 后台任务层（shell/agent job 共用注册表、日志落盘、通知注入）+ `tui.py` 行内渲染 TUI，基于 demo4 底座（规划轴三件 + 记忆全继承、无自动压缩；demo3 的 MCP 依赖模拟 server 不带）；demo6 基于 demo5 十二文件底座，加 `permission.py` 约束层（Permission 规则引擎 + Hook + `dispatch_tool` 串进共用循环 + 审批冒泡——Subagent 的 ask 入队挂起、主循环空闲弹层，主/子一体受控））。
 
 ### demo5 的定位
 

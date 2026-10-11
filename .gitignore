@@ -33,3 +33,5 @@ Thumbs.db
 *_transcript_*.txt
 demo5-multiagent/memory/
 demo5-multiagent/jobs/
+demo6-safety/memory/
+demo6-safety/jobs/
