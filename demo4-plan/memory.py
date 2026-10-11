@@ -92,10 +92,7 @@ def build_system_prompt(verbose: bool = False) -> str:
     if verbose:
         if memory:
             n_lines = len(memory.splitlines())
-            print(f"[记忆] 已加载 {MEMORY_FILE}（{n_lines} 行）:")
-            for line in memory.splitlines():
-                if line.strip():
-                    print(f"   {line}")
+            print(f"[记忆] 已加载 {MEMORY_FILE}（{n_lines} 行）")
         else:
             print(f"[记忆] 无跨会话记忆（{MEMORY_FILE} 为空或不存在——首次运行，或还没有值得记住的事实）")
 

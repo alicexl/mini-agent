@@ -114,18 +114,20 @@ def execute_bash(command: str) -> str:
 
 
 def read_file(path: str) -> str:
-    """读取文件内容"""
+    """读取文件内容（utf-8 → gbk 回退：Windows 子进程产物常是 GBK）"""
     try:
         if not os.path.exists(path):
             return f"[错误] 文件不存在: {path}"
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            with open(path, "r", encoding="gbk", errors="replace") as f:
+                content = f.read()
         max_length = 20000
         if len(content) > max_length:
             content = content[:max_length] + f"\n\n... [内容已截断，共 {len(content)} 字符]"
         return content
-    except UnicodeDecodeError:
-        return "[错误] 文件不是有效的文本文件或编码不支持"
     except Exception as e:
         return f"[错误] 读取文件失败: {e}"
 

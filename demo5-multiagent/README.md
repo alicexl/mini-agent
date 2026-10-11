@@ -28,14 +28,14 @@
 | `session.py` | 会话层：`memory/<会话ID>.jsonl` 持久化 + `/resume` |
 | `commands.py` | 命令层：`/help` `/status` `/tools` `/skills` `/memory` `/resume` `/new` `/compact` `/quit`（/new 补 job 清理） |
 | `skills/review.md` | 示例 Skill——代码审查工作流（继承 demo4） |
-| `jobs/` | 运行时生成的后台任务日志目录（已 gitignore） |
+| `jobs/` | 运行时生成的后台任务日志目录（已 gitignore；启动时自动清理上次遗留，被其他实例占用的跳过） |
 | `memory/` | 运行时生成的双层记忆目录（已 gitignore，同 demo2） |
 
 ## 设计要点
 
 ### 与 demo4 的差异
 
-- **新增 `subagent.py`**（多 Agent 层）+ **新增 `jobs.py`**（后台任务层）+ **agent.py 微调**（工具合并为 9 个、通知注入 + 空闲等待汇报轮）+ **tools.py 微调**（run_in_background 参数）+ **render.py 微调**（indent 参数）
+- **新增 `subagent.py`**（多 Agent 层）+ **新增 `jobs.py`**（后台任务层）+ **新增 `tui.py`**（TUI 层，仅 TTY）+ **agent.py 微调**（工具合并为 9 个、通知注入 + 空闲等待汇报轮）+ **tools.py 微调**（run_in_background 参数）+ **ask.py / commands.py 微调**（TUI 弹层钩子 / /new 补 job 清理）——render.py 代码未动（仅补 docstring；TUI 重定向在 agent.py import 前完成）
 - **无自动压缩**（同 demo3/4）：压缩只由 `/compact` 手动发起
 
 ### jobs：后台任务机制
@@ -50,8 +50,8 @@
 
 - LLM 判断任务相互独立时，调 `subagent(role, task)` 派后台 Subagent（描述里写了正向触发 + 反向抑制）
 - **主/子同构**：主 Agent 与 Subagent 共用 `run_react_loop`，差别只在传入的 messages / system / tools
-- **工具集只有基础四件套**：plan / use_skill / ask / job_kill / subagent 全不给——防递归、独立干活不回头问用户
-- **Claude Code 对照**：对标 Task 工具；Fork agent（共享上下文变体）在讲稿里讲机制、代码不实现
+- **工具集只有基础四件套**：plan / use_skill / ask / job_kill / subagent 全不给——防递归、独立干活不回头问用户；execute_bash 摘掉 run_in_background（子任务不起后台 job）
+- **Claude Code 对照**：对标 Task 工具；干活期间插话（/btw 旁路）与 Fork agent（共享上下文变体）讲机制、代码不实现——demo5 默认纯后台模式，干活期间消息排队、轮末处理
 
 ## 运行
 

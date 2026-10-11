@@ -75,6 +75,14 @@ class JobRegistry:
 
     def __init__(self) -> None:
         os.makedirs(JOBS_DIR, exist_ok=True)
+        # 启动清理上次遗留的日志（job id 随机后缀、只增不减）。逐个 try 跳过删不掉的：
+        # Windows 下其他实例正在写的日志持有文件锁——多点启动时活跃日志因此不误删
+        for name in os.listdir(JOBS_DIR):
+            if name.endswith(".log"):
+                try:
+                    os.remove(os.path.join(JOBS_DIR, name))
+                except OSError:
+                    pass
         self._jobs: dict[str, Job] = {}
         self.on_complete = None   # agent.py 注入的完成提示回调（可取消 prompt 用）
 
@@ -204,6 +212,10 @@ class JobRegistry:
         for job in running:
             self.kill(job.id)
         return len(running)
+
+    def clear_finished(self) -> None:
+        """清掉已终结的 job 条目（/new 重开会话时用——注册表不跨会话累积）"""
+        self._jobs = {k: v for k, v in self._jobs.items() if v.status == "running"}
 
 
 def _kill_process_tree(pid: int) -> None:

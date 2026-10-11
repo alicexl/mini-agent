@@ -6,7 +6,8 @@ Demo5 多 Agent 层 — Subagent（多 Agent 轴的核心）
     subagent        委派一次性 Subagent 在后台完成独立子任务——独立 context（messages +
                     system prompt），完成后经 <task-notification> 通知把最终报告送回
                     主 Agent；工具集只给基础四件套（plan / use_skill / ask / job_kill /
-                    subagent 全不给——防递归、不回头问用户）
+                    subagent 全不给——防递归、不回头问用户；execute_bash 摘掉
+                    run_in_background——子任务不起后台 job）
     run_react_loop  主 Agent 与 Subagent 共用的 ReAct 循环——差别只在传入的
                     messages / system / tools（主/子同构，demo5 的关键设计）
 
@@ -19,11 +20,12 @@ Demo5 多 Agent 层 — Subagent（多 Agent 轴的核心）
 
 import os
 
-from render import print_divider, print_step, print_stop_reason
+from render import print_divider, print_step, print_stop_reason, print_cache_stats
+from memory import USE_CACHE_CONTROL
 import jobs
 
 
-MAX_ITERATIONS = 10  # 单个 ReAct 循环的最大轮数
+MAX_ITERATIONS = 20  # 单个 ReAct 循环的最大轮数（主/子共用——防跑飞空转）
 _MAIN_ROUND = 0      # 主 Agent 会话内连续轮数（跨 turn 累计，通知汇报轮接着数）
 
 # 思考模式开关（默认关闭）：开启后每轮先推理再决策，✻ thinking 随回复展示
@@ -68,9 +70,16 @@ def subagent(role: str, task: str) -> str:
     工具集只给基础四件套（plan / use_skill / ask / job_kill / subagent 全不给——
     防递归、独立干活不回头找用户拿主意）。完成后通知机制把最终报告送回主 Agent。
     """
-    # ① 工具集裁剪：Subagent 只有基础四件套
-    tools = [t for t in ALL_TOOLS
+    # ① 工具集裁剪：Subagent 只有基础四件套（dict 复制——execute_bash 还要改 schema）
+    tools = [dict(t) for t in ALL_TOOLS
              if t["name"] in ("execute_bash", "read_file", "write_file", "edit")]
+    # execute_bash 摘掉 run_in_background：子任务不起后台 job——全局单注册表下，
+    # 起了通知也会错送主 Agent；描述里的后台用法引导一并去掉
+    bash = next(t for t in tools if t["name"] == "execute_bash")
+    bash["description"] = "执行任意 shell 命令，可用于文件操作、系统命令等"
+    bash["input_schema"] = {"type": "object",
+                            "properties": {"command": bash["input_schema"]["properties"]["command"]},
+                            "required": ["command"]}
 
     def _run(job, log_file) -> str:
         # ② 独立 messages：全新一份，只装任务描述
@@ -159,6 +168,7 @@ def run_react_loop(
 
         if verbose:
             print_stop_reason(response.stop_reason)
+            print_cache_stats(response.usage, use_cache_control=USE_CACHE_CONTROL)
 
         # 判停（最终回复也落进 messages——主循环落会话历史，子循环随局部变量销毁）
         if response.stop_reason != "tool_use":

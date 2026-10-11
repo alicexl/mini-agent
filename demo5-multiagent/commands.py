@@ -112,7 +112,10 @@ def _cmd_memory(state: SessionState) -> bool:
 def _cmd_new(state: SessionState) -> bool:
     """开新会话：清空活历史 + 换新会话 ID。旧会话文件原样留在磁盘等 /resume。"""
     import jobs
-    jobs.REGISTRY.shutdown()   # 清理上个会话遗留的后台 job
+    import subagent
+    jobs.REGISTRY.shutdown()          # 清理上个会话遗留的后台 job
+    jobs.REGISTRY.clear_finished()    # 终结条目出表——注册表不跨会话累积
+    subagent._MAIN_ROUND = 0          # 轮次编号重新起算
     state.history.clear()
     state.session_id = session.new_session_id()
     console.print(f"已开启新会话 [cyan]{state.session_id}[/]\n")

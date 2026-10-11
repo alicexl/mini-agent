@@ -15,14 +15,14 @@ Demo5 - 多 Agent 轴的 Agent
 
 十二文件结构（demo4 九文件 + 多 Agent 层 + 后台任务层 + TUI 层）：
     agent.py     主入口：客户端 + 主循环（调 subagent.run_react_loop）+ 轮询循环
-    tools.py     工具层（demo1 四件套，execute_bash 加 run_in_background）
+    tools.py     工具层（demo1 四件套；execute_bash 加 run_in_background）
     plan.py      规划层：plan 工具（继承 demo4）
     skill.py     Skill 层：Skill 加载器 + use_skill（继承 demo4）
     ask.py       提问层：ask_user_question 方向键 UI + 非 TTY 降级（继承 demo4）
     subagent.py  多 Agent 层：subagent 工具 + 主/子共用 ReAct 循环（demo5 新增）
     jobs.py      后台任务层：Job 注册表 + 日志 + 通知 + job_kill（demo5 新增）
     tui.py       TUI 层：全屏界面——日志区滚动 + 底部常驻输入框 + ask 弹层（demo5 新增）
-    render.py    渲染层（demo2 版 + 嵌套缩进；TUI 模式下输出经重定向进日志区）
+    render.py    渲染层（demo2 版原样；TUI 重定向在 import 前完成——输出自动进日志区）
     memory.py    记忆层（demo2 版减自动压缩）
     session.py   会话层：memory/<会话ID>.jsonl 持久化 + /resume
     commands.py  命令层：/help /status /tools /skills /memory /resume /new /compact /quit
@@ -137,7 +137,7 @@ def init_client() -> None:
 #   - 主循环走 subagent.run_react_loop——主 Agent 与 Subagent 跑同一个循环，
 #     差别只在 messages / system / tools（主/子同构）
 
-def run_agent(user_input: str, history: list, verbose: bool = True):
+def run_agent(user_input: str, history: list):
     """
     在会话历史上跑一轮 ReAct（主循环调共用循环）。
 
@@ -151,7 +151,7 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
     for note in jobs.REGISTRY.build_notifications():
         history.append({"role": "user", "content": note})
 
-    system_prompt = build_system_prompt(verbose=verbose)
+    system_prompt = build_system_prompt(verbose=True)   # [记忆] 加载提示每轮显示
     system_prompt += skill.build_skill_metadata_section()   # Skills 元信息（不触发也不影响）
     system_prompt += ask.ASK_GUIDANCE                       # 提问指引（继承 demo4）
     system_prompt += jobs.JOBS_GUIDANCE                     # 后台任务引导（demo5 新增）
@@ -166,7 +166,7 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
         tools=list(ALL_TOOLS),   # 传副本——plan 调用后移除不能误改全量工具集
         local_fns=AVAILABLE_FUNCTIONS,
         system=system_param,
-        verbose=verbose,
+        verbose=True,
     )
 
     return final, history[before:]
@@ -238,16 +238,26 @@ if __name__ == "__main__":
     input_ack = threading.Event()   # 放行门（仅管道输入线程用；TUI 下 set 无害）
     _main_busy = threading.Event()  # 主循环正在跑轮次：job 完成提示延后到本轮结束
     _pending_notices: list = []
+    _notices_lock = threading.Lock()   # 护 _pending_notices 追加/取走（watcher 线程与主循环并发）
 
     def _job_completed(text: str) -> None:
         """job 完成的终端提示。
         主循环忙（正在跑轮次）→ 延后到本轮结束再打印（不插进轮次输出中间）；
         空闲 → 直接打印（TUI 进日志区，管道进终端）+ 放行输入线程重弹提示符。"""
         if _main_busy.is_set():
-            _pending_notices.append(text)
+            with _notices_lock:
+                _pending_notices.append(text)
         else:
             print_step("tool_return", text, limit=200)
             input_ack.set()
+
+    def _drain_pending_notices() -> None:
+        """轮末补打攒下的 job 提示。锁内快照清空——防 watcher 线程此刻 append 丢条目。"""
+        with _notices_lock:
+            notices = _pending_notices[:]
+            del _pending_notices[:]
+        for text in notices:
+            print_step("tool_return", text, limit=200)
 
     jobs.REGISTRY.on_complete = _job_completed
 
@@ -311,7 +321,7 @@ if __name__ == "__main__":
             if user_input is WAKEUP:
                 _main_busy.set()
                 try:
-                    final, new_msgs = run_agent("", state.history, verbose=True)
+                    final, new_msgs = run_agent("", state.history)
                     session.append_messages(state.session_id, new_msgs)
                     print_markdown(final)
                     _review_async(list(state.history))   # 后台回顾：轮次立即返回
@@ -319,9 +329,7 @@ if __name__ == "__main__":
                     print_error(f"[错误] {e}")
                 finally:
                     _main_busy.clear()
-                    for text in _pending_notices:      # 轮次期间完成的 job：此刻补打印
-                        print_step("tool_return", text, limit=200)
-                    _pending_notices.clear()
+                    _drain_pending_notices()
                     input_ack.set()
                 continue
 
@@ -335,9 +343,7 @@ if __name__ == "__main__":
             _main_busy.set()
             action = handle_command(user_input, state)
             _main_busy.clear()
-            for text in _pending_notices:      # 命令执行期间完成的 job：此刻补打印
-                print_step("tool_return", text, limit=200)
-            _pending_notices.clear()
+            _drain_pending_notices()
             if action == "break":
                 _clean_exit()
             if action == "continue":
@@ -346,7 +352,7 @@ if __name__ == "__main__":
 
             _main_busy.set()
             try:
-                final, new_msgs = run_agent(user_input, state.history, verbose=True)
+                final, new_msgs = run_agent(user_input, state.history)
                 session.append_messages(state.session_id, new_msgs)
                 print_markdown(final)
                 _review_async(list(state.history))   # 后台回顾：轮次立即返回
@@ -354,9 +360,7 @@ if __name__ == "__main__":
                 print_error(f"[错误] {e}")
             finally:
                 _main_busy.clear()
-                for text in _pending_notices:      # 轮次期间完成的 job：此刻补打印
-                    print_step("tool_return", text, limit=200)
-                _pending_notices.clear()
+                _drain_pending_notices()
                 input_ack.set()   # 本轮处理完：放行输入线程显示下一个提示符（管道模式）
 
     if _TTY_MODE:
