@@ -1,8 +1,8 @@
 # mini-agent — 从 0 到 1 拆解 Agent 的底层原理
 
-> 用 6 个递进的最简 demo（每个 `agent.py` 约 400–720 行）把 Claude Code / Cursor / Devin 这类"自动干活"工具的底层机制完全拆开。
+> 用 6 个递进的最简 demo（从 demo1 的 4 文件约 600 行，到 demo6 的 13 文件约 3000 行）把 Claude Code / Cursor / Devin 这类"自动干活"工具的底层机制完全拆开。
 >
-> 每个目录下一份 `讲稿.md`（口播 + 屏显 + 真实运行日志，配合视频讲解）+ 一份 `agent.py`（可直接 `python agent.py` 跑通）+ 一份 `README.md`（精简的设计方案 + 运行说明）。本文件是**顶层索引**——一张图看完 6 个 demo 的能力轴与解决的核心问题。
+> 每个目录下一份多文件实现（入口 `agent.py`，直接 `python agent.py` 跑通）+ 一份教学文档（设计解析 + 真实运行日志）——demo1 已并入其 `README.md`，demo2–6 为 `讲稿.md`（口播 + 屏显，配合视频讲解）。本文件是**顶层索引**——一张图看完 6 个 demo 的能力轴与解决的核心问题。
 
 一个先行的总纲：**Agent 效果 = LLM 能力 × Agent 工程**——模型决定「想得出下一步吗」，工程决定「想法能不能落地」，任何一方拉胯最终效果都上不去。本系列拆的是后者——Agent Runtime（见视角 D）。也正因为它讲的是工程层，与具体模型解耦：默认用 glm-5.2 跑通全部 demo，换官方 Claude 或其他兼容网关只改 `BASE_URL` / `MODEL` 两个常量。
 
@@ -84,7 +84,7 @@ python agent.py
 | **Plan 模式**（自动决策） | demo4 | LLM 自判复杂度调 plan 列步骤（一次性：调后从 tools 移除）——Claude Code Plan Mode 的教学最简版 |
 | **Skill** | demo4 | skills/*.md 工作流模板，元信息常驻 system prompt，正文经 use_skill 按需拉取（渐进式披露） |
 | **Subagent**（后台一次性） | demo5 | 独立 context、后台执行、完成通知带回报告；适合**相互独立**的子任务 |
-| **Permission** | demo6 | allow/deny/ask 规则匹配（如 `Bash(rm:*)`），工具调用前的访问控制 |
+| **Permission** | demo6 | `(工具, fnmatch 模式, action)` 三元组规则表，first-match——allow / deny / ask，工具调用前的访问控制 |
 | **Hook** | demo6 | PreToolUse / PostToolUse 事件回调（permission.py 内函数：Pre 可拦/改 input，Post 可改/补 output） |
 
 ---
@@ -128,7 +128,7 @@ demo6 引入的几个概念，在产品级 Runtime 里有更通用的名字：
 | Permission | **Runtime Policy** | 工具调用的准入策略（allow / deny / ask） |
 | Hook | **Lifecycle Extension** | 在生命周期点（Pre/Post/SessionStart…）插扩展逻辑 |
 | demo2 compact / caching | **Runtime Optimization** | 管理上下文窗口、压成本 |
-| Sandbox（demo6 第 4 章演进方向） | **Execution Isolation** | 限制工具执行的爆炸半径 |
+| Sandbox（demo6 第 5 章演进方向） | **Execution Isolation** | 限制工具执行的爆炸半径 |
 
 > 这个视角不改 demo6 的定位——demo6 仍是「base × 约束」这条单轴。Runtime 是把 6 个 demo 串起来的**整合视角**：学完 6 轴，你脑子里就拼出了一个完整 Agent Runtime 的骨架。
 
@@ -170,9 +170,9 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 
 ## 六、各 demo 文件清单
 
-| Demo | 入口 | 核心新增文件 | 讲稿 |
+| Demo | 入口 | 核心新增文件 | 文档 |
 |---|---|---|---|
-| demo1 | `demo1-react/agent.py`（+ `agent_single.py` 原始单文件版；拆出 `tools.py` / `render.py`） | — | `demo1-react/讲稿.md` |
+| demo1 | `demo1-react/agent.py`（+ `agent_single.py` 原始单文件版；拆出 `tools.py` / `render.py` / `commands.py`） | — | `demo1-react/README.md`（教学文档已并入） |
 | demo2 | `demo2-memory/agent.py`（+ `tools.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `memory/` 双层记忆目录（运行时生成：MEMORY.md + 会话 jsonl） | `demo2-memory/讲稿.md` |
 | demo3 | `demo3-tools/agent.py`（+ `tools.py` / `mcp.py` / `render.py` / `memory.py` / `session.py` / `commands.py`）+ `mcp_server.py` | `memory/` 双层记忆目录（继承 demo2） | `demo3-tools/讲稿.md` |
 | demo4 | `demo4-plan/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（示例 Skill） | `demo4-plan/讲稿.md` |
@@ -208,11 +208,11 @@ demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以�
 
 ### 路径 3：看真实运行
 
-每个 demo 都有"真实运行回显"——`讲稿.md` 里贴了实测日志（不是虚构），直接看：
+每个 demo 都有"真实运行回显"——教学文档里贴了实测日志（不是虚构），直接看：
 
-- demo1 §3 — 统计 .py 文件数 + 写 count.txt（3 轮 ReAct）
+- demo1 README §3 — 统计 .py 文件数 + 写 count.txt（3 轮 ReAct）
 - demo2 §5 — 案例 1（统计 .py 文件，3 轮 ReAct + caching 命中）+ 案例 2（5 步串行任务，7 轮 ReAct + compact 触发）
-- demo3 §7 — MCP 远程调用 + edit 精细修改对照
+- demo3 §5 — 5 步任务混用本地四件套 + MCP 三件套（含 edit 只发增量改 weather.txt）
 - demo4 §5 — ask 主动提问 + plan 自动决策（含 plan×ask 联动）+ Skill 匹配触发
 - demo5 §3 — 耗时命令自动放后台 + Subagent 后台并行派发三个独立子任务
 - demo6 §2 / §3 — Permission deny 拦截 + Hook Pre/Post 回调
@@ -221,7 +221,7 @@ demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以�
 
 ## 八、系列回顾（讲稿交叉引用）
 
-每个 demo 的讲稿结尾都有一张"轴覆盖回顾表"。为了避免表格在 6 个文件里各自漂移，本 README 的「轴清单 × 内容矩阵」是**唯一权威表**——如发现任何讲稿里的进度表与本页不一致，以本页为准。
+每个 demo 的文档结尾都有一张轴回顾表（demo1 在 README「后续扩展轴」，demo2–6 在讲稿附录）。为了避免表格在多个文件里各自漂移，本 README 的「轴清单 × 内容矩阵」是**唯一权威表**——如发现任何 demo 文档里的进度表与本页不一致，以本页为准。
 
 各讲稿结尾的公式也应与上文「视角 A」对齐：
 
