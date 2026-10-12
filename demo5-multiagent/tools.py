@@ -96,6 +96,14 @@ TOOLS = [
 #   - 错误信息也字符串化返回给大模型，让它自己看到错误后调整策略
 #   - 设置超时，防止死循环或长时间阻塞
 
+def _decode_output(b: bytes) -> str:
+    """命令输出解码：utf-8 优先，GBK 回退（Windows 控制台命令如 dir 输出 GBK 中文）"""
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        return b.decode("gbk", errors="replace")
+
+
 def execute_bash(command: str, run_in_background: bool = False) -> str:
     """执行 shell 命令（run_in_background=True 时放后台，立即返回 job 信息）"""
     if run_in_background:
@@ -109,15 +117,13 @@ def execute_bash(command: str, run_in_background: bool = False) -> str:
             command,
             shell=True,
             capture_output=True,
-            encoding="utf-8",      # GBK Windows 下 text=True 会崩，显式 UTF-8
-            errors="replace",
-            timeout=60,            # 防止死循环 / 长时间阻塞
+            timeout=60,            # 防止死循环 / 长时间阻塞（bytes 进，解码走回退）
         )
         output = []
         if result.stdout:
-            output.append(result.stdout)
+            output.append(_decode_output(result.stdout))
         if result.stderr:
-            output.append(f"[stderr] {result.stderr}")
+            output.append(f"[stderr] {_decode_output(result.stderr)}")
         if result.returncode != 0:
             output.append(f"[exit code: {result.returncode}]")
         return "\n".join(output) if output else "[命令执行成功，无输出]"
