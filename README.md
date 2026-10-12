@@ -1,38 +1,60 @@
 # mini-agent — 从 0 到 1 拆解 Agent 的底层原理
 
-> 用 6 个递进的最简 demo 把 Claude Code / Cursor / Devin 这类"自动干活"工具的底层机制完全拆开。
+> 用 6 个递进的最简 demo（每个 `agent.py` 约 400–720 行）把 Claude Code / Cursor / Devin 这类"自动干活"工具的底层机制完全拆开。
 >
-> 总纲：**Agent 效果 = LLM 能力 × Agent 工程**——本系列拆的是后者。
+> 每个目录下一份 `讲稿.md`（口播 + 屏显 + 真实运行日志，配合视频讲解）+ 一份 `agent.py`（可直接 `python agent.py` 跑通）+ 一份 `README.md`（精简的设计方案 + 运行说明）。本文件是**顶层索引**——一张图看完 6 个 demo 的能力轴与解决的核心问题。
 
-📖 **[完整总览 → demo1-6-总览.md](demo1-6-总览.md)**
+一个先行的总纲：**Agent 效果 = LLM 能力 × Agent 工程**——模型决定「想得出下一步吗」，工程决定「想法能不能落地」，任何一方拉胯最终效果都上不去。本系列拆的是后者——Agent Runtime（见视角 D）。也正因为它讲的是工程层，与具体模型解耦：默认用 glm-5.2 跑通全部 demo，换官方 Claude 或其他兼容网关只改 `BASE_URL` / `MODEL` 两个常量。
 
-## 目录
+---
 
-| Demo | 轴 | 一句话公式 | 解决的核心问题 |
-|---|---|---|---|
-| [demo1-react](demo1-react) | 循环 | `LLM × 工具 × 循环 × 状态` | Agent 最小心跳——ReAct 循环跑通（base） |
-| [demo2-memory](demo2-memory) | 记忆 | `base × 记忆` | 任务结束就忘；多轮 ReAct 把 messages 撑爆上下文 |
-| [demo3-tools](demo3-tools) | 工具 | `base × 工具扩展` | 本地工具有限；想接外部协议 |
-| [demo4-plan](demo4-plan) | 规划 | `base × 规划` | 走一步看一步容易跑偏；常见任务每次重新想 |
-| [demo5-multiagent](demo5-multiagent) | 多 Agent | `base × 多 Agent` | 单 Agent 上下文膨胀；不能外包/协作独立子任务 |
-| [demo6-safety](demo6-safety) | 约束 | `base × 约束` | 工具太自由（`rm -rf /`），安全逻辑硬编码不可配置 |
+## 一、一张图看完整脉络
 
-> 每条轴正交：demo1 是 base，demo2-6 各自独立加一条轴，不链式叠加。读者可以按任意顺序学 demo2-6。
+```
+                    Agent = LLM × 工具 × 循环 × 状态      （demo1 = base）
+                                │
+            ┌───────────────────┴───────────────────┐
+            ▼                                       ▼
+        能力（demo2-5）                          约束（demo6）
+            │                                       │
+   ┌────────┼────────┐                两层 Control Plane
+   ▼        ▼        ▼                · Permission（allow/deny/ask 规则）
+ 记忆      工具     规划                · Hook（PreToolUse/PostToolUse 回调）
+（demo2）（demo3）（demo4）
+            │
+            ▼
+       多 Agent（demo5）
+   Subagent
+```
 
-## 预备知识
+**每个 demo 拆一条正交的能力轴**，公式不链式叠加，而是 `demo(N) = base × 轴N`——base 就是 demo1（ReAct 心跳），后续每个 demo 在 base 上独立加一条轴。读者可以按任意顺序学 demo2-6。
+
+| Demo | 轴 | 一句话公式 | 比喻 | 解决的核心问题 |
+|---|---|---|---|---|
+| **[demo1-react](demo1-react)** | 循环 | `LLM × 工具 × 循环 × 状态` | 给它**双手** | Agent 最小心跳——ReAct 循环跑通（base） |
+| **[demo2-memory](demo2-memory)** | 记忆 | `base × 记忆` | 给它**长期记忆 + 动态压缩** | 重启就忘（会话不持久）；messages 会话内无限增长，撑爆上下文窗口、烧 token |
+| **[demo3-tools](demo3-tools)** | 工具 | `base × 工具扩展` | 给它**更多手脚 + 远程工具箱** | 工具只有 read/write/bash/edit；想接外部协议 |
+| **[demo4-plan](demo4-plan)** | 规划 | `base × 规划` | 给它**纸笔 + 套路手册** | 走一步看一步容易跑偏；常见任务每次重新想 |
+| **[demo5-multiagent](demo5-multiagent)** | 多 Agent | `base × 多 Agent` | 给它**一次性助手** | 单 Agent 上下文膨胀；独立子任务无法外包隔离 |
+| **[demo6-safety](demo6-safety)** | 约束 | `base × 约束` | 给它**手脚的安全防护** | 工具太自由（`rm -rf /`、`dd of=/dev/sda`），且安全逻辑硬编码不可配置 |
+
+---
+
+## 二、预备知识
 
 两个贯穿全系列的最小概念，不熟悉的话先扫一眼：
 
 - **token**：LLM 处理文本的最小单位，约等于一个汉字或半个英文单词。上下文容量、API 计费都以 token 计——demo2 的压缩与缓存整条轴都在跟 token 搏斗。
 - **上下文窗口**：模型一次能"看到"的 token 上限（主流 128K–1M），超出即"失忆"。Agent 循环每轮都往里追加工具调用与结果，消耗极快——这是 demo2 要解决的核心问题。
 
-## 快速开始
+---
+
+## 三、快速开始
 
 ```bash
-# 1. 配置 API Key（任选一种）
-#    a) 改 demo1-react/agent.py 顶部的 API_KEY = ""
-#    b) export ANTHROPIC_API_KEY=xxx
-#    c) 启动时交互式输入
+# 1. 配置 API Key（两级回退，全系列统一）
+#    a) export ANTHROPIC_API_KEY=xxx   （优先）
+#    b) 不设则启动时交互式输入（仅本次有效）
 
 # 2. 进入任一 demo 目录运行
 cd demo1-react
@@ -40,15 +62,198 @@ pip install -r requirements.txt
 python agent.py
 ```
 
-默认走**智谱 BigModel 的 Anthropic 兼容网关**（`https://open.bigmodel.cn/api/anthropic`）+ `glm-5.2` 模型——接口与 Anthropic SDK 完全兼容，换官方 API 或别的兼容网关只需改 `BASE_URL` / `MODEL`。
+- **环境**：Python 3.9+；依赖见各 demo 的 `requirements.txt`（`anthropic` SDK + `rich` / `prompt_toolkit` 渲染层，demo3 的 MCP Client 另需 `requests`）
+- **网关 / 模型**：所有 demo 默认走**智谱 BigModel 的 Anthropic 兼容网关**（`https://open.bigmodel.cn/api/anthropic`）+ `glm-5.2` 模型——接口与 Anthropic SDK 完全兼容，换官方 API 或别的兼容网关只需改 `BASE_URL` / `MODEL`
+- **平台**：Windows 10 + Git Bash 实测跑通（讲稿里提到 `[ -f hello.txt ]` 在 Windows cmd 报错、LLM 自动切换 `set /a` cmd 内置算术、GBK 编码坑等真实跨平台问题）
 
-每个 demo 目录下有：
-- **`讲稿.md`** — 完整教学讲稿（口播 + 屏显 + 真实运行日志，配合视频讲解）
-- **`agent.py`** — 入口实现（约 400-720 行，可直接 `python agent.py` 跑通；demo1 已拆分为 `agent.py` + `tools.py` + `render.py` 三文件，另保留 `agent_single.py` 原始单文件版）
-- **`README.md`** — 精简的设计方案 + 运行说明
+---
 
-## 学习路径
+## 四、轴清单 × 内容矩阵
 
-推荐按编号顺序学习——demo1 是 base，学完 demo1 后 demo2-6 可以按兴趣调整顺序。
+> 看清每个轴覆盖了什么、哪条轴解决什么问题。
 
-详细的学习路径、能力矩阵、三种拆任务机制对比见 **[总览页](demo1-6-总览.md)**。
+| 轴 | 所属 Demo | 核心机制 |
+|---|---|---|
+| **ReAct 循环** | demo1 | `messages.append(user) → LLM → tool_use → tool_result → ... → stop_reason="end_turn"` |
+| **短期记忆**（messages） | demo2 base | 默认就有（demo1 会话内已持续累积）；问题在无限增长撑爆上下文窗口 |
+| **长期记忆**（落盘文件） | demo2 | `memory/MEMORY.md` 模型自主维护（对齐 Claude Code）：system prompt 带维护指引，模型用 write_file / edit 自主写入持久事实 |
+| **上下文压缩** | demo2 | `compact_messages` 滚动摘要，防 messages 撑爆 |
+| **Prompt caching** | demo2 | `cache_control` breakpoint + 5/60min TTL，长 prompt 不爆成本 |
+| **会话持久化**（/resume） | demo2 | `memory/<会话ID>.jsonl` 一行一条只追加；重启后 `/resume` 扫目录恢复——模型无状态，「会话」只是每次请求带上的 messages 数组 |
+| **MCP**（外部工具协议） | demo3 | client-server + JSON-RPC 风格 round-trip，挂外部 server |
+| **Plan 模式**（自动决策） | demo4 | LLM 自判复杂度调 plan 列步骤（一次性：调后从 tools 移除）——Claude Code Plan Mode 的教学最简版 |
+| **Skill** | demo4 | skills/*.md 工作流模板，元信息常驻 system prompt，正文经 use_skill 按需拉取（渐进式披露） |
+| **Subagent**（后台一次性） | demo5 | 独立 context、后台执行、完成通知带回报告；适合**相互独立**的子任务 |
+| **Permission** | demo6 | allow/deny/ask 规则匹配（如 `Bash(rm:*)`），工具调用前的访问控制 |
+| **Hook** | demo6 | PreToolUse / PostToolUse 事件回调（permission.py 内函数：Pre 可拦/改 input，Post 可改/补 output） |
+
+---
+
+## 五、六个核心视角
+
+### 视角 A：轴公式（每条轴独立，不链式叠加）
+
+```
+demo1  base = LLM × 工具 × 循环 × 状态
+demo2  = base × 记忆            （短期 messages + 长期文件 + compact + caching）
+demo3  = base × 工具扩展        （MCP 外部工具协议）
+demo4  = base × 规划            （手动 Plan + 自动 Plan + Skill 预消化）
+demo5  = base × 多 Agent        （Subagent 独立 context 分包）
+demo6  = base × 约束            （Permission 规则 + Hook 回调）
+```
+
+### 视角 B：两种"拆任务"机制对比
+
+| 机制 | 出现的 demo | messages | 适合 |
+|---|---|---|---|
+| **Plan**（step 列表） | demo4 | 所有 step **共享**一份 | 后续 step 要用前面 step 的结果（有依赖） |
+| **Subagent**（后台一次性） | demo5 `subagent.py` | 每个 Subagent **独立**一份 context，后台执行、完成通知带回报告 | 多个**相互独立**的子任务 |
+
+### 视角 C：能力 vs 约束
+
+- demo1–5 都在**加能力**：循环 → 记忆 → 工具 → 规划 → 多 Agent
+- **demo6 是唯一的转弯**——不加能力，而是在 LLM 和 execute_bash / read_file / write_file 这些"手脚"之间插入**两层 Control Plane**（Permission / Hook）
+- 真正的智能体 = 能力与约束的平衡
+
+### 视角 D：六轴最终都落在 Agent Runtime 层
+
+前面三个视角把 6 个 demo 看成「6 条独立的能力/约束轴」。还有一个更高的视角：**这 6 条轴最终都落在同一个东西上——Agent Runtime（也叫 harness）**。
+
+Agent Runtime 是包裹 LLM 的那层工程代码——本系列每个 demo 的 `agent.py` 就是一个最简 Runtime。LLM 只负责「想」，Runtime 负责「把想法变成行动并管住行动」：循环、记忆、工具、规划、多 Agent、约束，全是 Runtime 的职责。Claude Code / Cursor / Devin 这些产品的差异，本质上是各自 Runtime 的工程化深度不同。
+
+demo6 引入的几个概念，在产品级 Runtime 里有更通用的名字：
+
+| demo6 / 系列里的叫法 | Runtime 层的通用概念 | 干什么 |
+|---|---|---|
+| Permission | **Runtime Policy** | 工具调用的准入策略（allow / deny / ask） |
+| Hook | **Lifecycle Extension** | 在生命周期点（Pre/Post/SessionStart…）插扩展逻辑 |
+| demo2 compact / caching | **Runtime Optimization** | 管理上下文窗口、压成本 |
+| Sandbox（demo6 第 4 章演进方向） | **Execution Isolation** | 限制工具执行的爆炸半径 |
+
+> 这个视角不改 demo6 的定位——demo6 仍是「base × 约束」这条单轴。Runtime 是把 6 个 demo 串起来的**整合视角**：学完 6 轴，你脑子里就拼出了一个完整 Agent Runtime 的骨架。
+
+### 视角 E：持续进化闭环（从经验中学习）
+
+再换一个视角：demo2、demo4、demo6 这三条轴，能串成同一条主线——**Agent 怎么从经验里学习**。
+
+Agent 每次任务结束，踩过的坑、试出来的窍门不该随上下文一起丢掉，而该沉淀成下次能复用的东西。沉淀有四种载体，本系列恰好踩中前三种：
+
+| 载体 | 含义 | 本系列对应的轴 |
+|---|---|---|
+| **知识** | 把经验写成可检索的事实 | demo2 `memory/MEMORY.md`——模型自主维护的持久事实落盘，下次启动加载 |
+| **指令** | 把经验写成可执行的工作流模板 | demo4 `skills/review.md`——description 匹配后注入 prompt |
+| **程序** | 把经验写死成 Harness 代码层约束 | demo6 `PERMISSION_RULES` / Hook——不靠 prompt 引导，LLM 绕不过去 |
+| 参数 | 把经验训练进模型权重 | 超出教学范围（见第九节） |
+
+一个巧妙的呼应：**Claude Code 的 `MEMORY.md`** 就是这套机制的工业版——demo2 的 `memory/MEMORY.md` 与它同名同构：system prompt 带维护指引，模型发现值得持久的事实就用普通文件工具（write_file / edit）自主更新，而不是任务结束自动写日志。
+
+**诚实的边界**：本系列给的是「沉淀的三种载体」，还不是完整的「持续进化闭环」。完整的闭环要把沉淀物**验证 → 发布 → 回滚**（改坏了能退回来），这套管理机制是工业级 harness 的事，不在 6 个 demo 内（见第九节）。但理解了 demo2/4/6 提供的三种载体，再看闭环就只剩「怎么管这些沉淀物」一层工程问题。
+
+### 视角 F：一切都是上下文（Context Engineering）
+
+最后一个视角：把镜头从 Runtime 拉回到 LLM 眼前——demo1–5 加的五条能力轴，干的其实是同一件事：**往同一个上下文窗口里组织信息**。
+
+| 轴 | 上下文视角下在做什么 |
+|---|---|
+| demo1 循环 | 循环本身就是上下文的增长——每轮追加 tool_use / tool_result |
+| demo2 记忆 | **塞什么**：compact 压缩腾空间，memory 落盘把信息搬过任务边界 |
+| demo3 工具 | **塞更多**：MCP 工具最终也是一段工具描述文本，能力的来源仍是上下文 |
+| demo4 规划 | **怎么塞**：Skill 元信息常驻 + 正文按需加载（渐进式披露） |
+| demo5 多 Agent | **塞到哪**：独立子任务开独立上下文，互不挤占 |
+| demo6 约束 | **唯一的例外**：不靠上下文「劝」，靠 dispatch 层代码「拦」 |
+
+demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引导的**（风格、流程、偏好）放进上下文；**绝不能违反的**（`rm -rf /`）放进代码——LLM 的输出再怎么「越狱」也绕不过 dispatch 层。
+
+模型能力固定的前提下，**上下文里塞什么、怎么塞、塞多少，直接决定 Agent 的表现**——这套组织信息的功夫，业界现在叫「上下文工程」（Context Engineering）。
+
+---
+
+## 六、各 demo 文件清单
+
+| Demo | 入口 | 核心新增文件 | 讲稿 |
+|---|---|---|---|
+| demo1 | `demo1-react/agent.py`（+ `agent_single.py` 原始单文件版；拆出 `tools.py` / `render.py`） | — | `demo1-react/讲稿.md` |
+| demo2 | `demo2-memory/agent.py`（+ `tools.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `memory/` 双层记忆目录（运行时生成：MEMORY.md + 会话 jsonl） | `demo2-memory/讲稿.md` |
+| demo3 | `demo3-tools/agent.py`（+ `tools.py` / `mcp.py` / `render.py` / `memory.py` / `session.py` / `commands.py`）+ `mcp_server.py` | `memory/` 双层记忆目录（继承 demo2） | `demo3-tools/讲稿.md` |
+| demo4 | `demo4-plan/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（示例 Skill） | `demo4-plan/讲稿.md` |
+| demo5 | `demo5-multiagent/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `subagent.py` / `jobs.py` / `tui.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（继承 demo4） | `demo5-multiagent/讲稿.md` |
+| demo6 | `demo6-safety/agent.py`（+ demo5 十二文件底座 + `permission.py` 约束层） | —（约束层全在 `permission.py`） | `demo6-safety/讲稿.md` |
+
+> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2–6 全部已迁移多文件结构**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `skill.py` Skill 层 + `ask.py` 提问层；demo5 加 `subagent.py` 多 Agent 层（后台执行 + 完成通知）+ `jobs.py` 后台任务层（shell/agent job 共用注册表、日志落盘、通知注入）+ `tui.py` 行内渲染 TUI，基于 demo4 底座（规划轴三件 + 记忆全继承、无自动压缩；demo3 的 MCP 依赖模拟 server 不带）；demo6 基于 demo5 十二文件底座，加 `permission.py` 约束层（Permission 规则引擎 + Hook + `dispatch_tool` 串进共用循环 + 审批冒泡——Subagent 的 ask 入队挂起、主循环空闲弹层，主/子一体受控））。
+
+### demo5 的定位
+
+demo5 只实现 **Subagent**（一次性外包，对应 Claude Code 的 Task tool / Cursor 的 agent / Devin 的子任务派发）。共享上下文的 **Fork agent** 变体在讲稿第 2 章讲机制、代码不实现。
+
+---
+
+## 七、推荐学习路径
+
+### 路径 1：按轴顺序（最推荐）
+
+demo1 → demo2 → demo3 → demo4 → demo5 → demo6
+
+demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以按兴趣调整顺序，但建议先记忆（demo2）再工具（demo3）——记忆轴轻量内闭环，工具轴涉及 MCP 协议认知门槛更高。
+
+### 路径 2：按主题
+
+| 想学 | 看这几个 |
+|---|---|
+| Agent 最小心跳 | demo1 |
+| 记忆系统 / 上下文管理 | demo2（短期 + 长期 + 压缩 + caching） |
+| 工具扩展 / MCP | demo3 |
+| 规划 / Skills | demo4 |
+| 多 Agent 系统 | demo5（Subagent） |
+| Agent 安全 | demo6（两层 Control Plane） |
+
+### 路径 3：看真实运行
+
+每个 demo 都有"真实运行回显"——`讲稿.md` 里贴了实测日志（不是虚构），直接看：
+
+- demo1 §3 — 统计 .py 文件数 + 写 count.txt（3 轮 ReAct）
+- demo2 §5 — 案例 1（统计 .py 文件，3 轮 ReAct + caching 命中）+ 案例 2（5 步串行任务，7 轮 ReAct + compact 触发）
+- demo3 §7 — MCP 远程调用 + edit 精细修改对照
+- demo4 §5 — ask 主动提问 + plan 自动决策（含 plan×ask 联动）+ Skill 匹配触发
+- demo5 §3 — 耗时命令自动放后台 + Subagent 后台并行派发三个独立子任务
+- demo6 §2 / §3 — Permission deny 拦截 + Hook Pre/Post 回调
+
+---
+
+## 八、系列回顾（讲稿交叉引用）
+
+每个 demo 的讲稿结尾都有一张"轴覆盖回顾表"。为了避免表格在 6 个文件里各自漂移，本 README 的「轴清单 × 内容矩阵」是**唯一权威表**——如发现任何讲稿里的进度表与本页不一致，以本页为准。
+
+各讲稿结尾的公式也应与上文「视角 A」对齐：
+
+```
+demo1: base = LLM × 工具 × 循环 × 状态
+demo2: = base × 记忆
+demo3: = base × 工具扩展
+demo4: = base × 规划
+demo5: = base × 多 Agent
+demo6: = base × 约束
+```
+
+---
+
+## 九、工业级 Agent 还做了哪些优化
+
+本系列是教学用最简实现，目的是让你一眼看懂原理。下面这些是真实生产级 Agent（Claude Code、Cursor、Devin、Replit、Codex CLI）在 harness 层面做的工程化优化，每个都对应工业界成熟做法：
+
+| 优化点 | 涉及轴 | 工业做法 |
+|---|---|---|
+| **中断恢复**（--resume / --continue） | 记忆 | 会话状态（messages）落盘到本地，下次启动加载接着干；不是知识记忆而是执行状态（demo2 已实现教学版：`memory/<会话ID>.jsonl` + `/resume` 命令） |
+| **会话级 hook** | 约束 | 除 PreToolUse/PostToolUse 外，还有 `SessionStart` / `UserPromptSubmit` / `PreCompact` 等会话级事件，最常用于环境信息注入 |
+| **并发工具调用** | 循环 | `parallel_tool_use=true`，LLM 一次 turn 可以并行调多个独立工具（如同时 read_file 三个文件） |
+| **Token 级压缩触发** | 记忆 | compact 不按条数触发，按上下文窗口占比（如 80%）触发，更精确 |
+| **向量记忆** | 记忆 | Chroma / Pinecone 语义检索 top-K（通用助手路线；coding agent 主流是文件记忆） |
+| **仓库地图**（repo map） | 工具 | tree-sitter 解析全仓 → PageRank 排名选重要符号 → 压进 ~1k token 的折叠地图（Aider），让 LLM 不读全文掌握代码结构 |
+| **执行环境隔离** | 约束 | firejail / Docker / microVM（Firecracker）——Control Plane 之外的 Execution Environment 层 |
+| **可观测性** | 循环 | Token 消耗追踪、cost tracker、`--debug` 模式、进度条/spinner |
+| **思考强度分档** | —（模型层参数） | 单一模型 + 思考强度参数（`thinking` / `reasoning_effort`）按任务复杂度调档：简单工具调用省 token，复杂推理拉满——取代「对话模型 vs 推理模型」二分法，2025 下半年起的行业共识 |
+
+这些优化点不在本系列 6 个 demo 的范围内，但理解了 demo1-6 的核心机制，再看这些工业优化就是「工程化增量」——原理你已经懂了。
+
+---
+
+*真正的智能体 = 能力与约束的平衡。demo1-5 加能力，demo6 加约束，二者缺一不可。*
