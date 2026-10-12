@@ -1,35 +1,9 @@
-# Demo2 — 记忆轴
+# Demo2 — 记忆轴：会话持久化、跨会话记忆、压缩与缓存
 
-> 在 demo1（base = LLM × 工具 × 循环 × 状态）基础上叠加「记忆轴」：让 Agent **记得过去**（长期记忆）、**不爆上下文**（动态压缩）、**跑得起长 prompt**（cache_control 缓存）。
->
-> 公式：`demo2 = base × 记忆`
+> 在 demo1（base = `LLM × 工具 × 循环 × 状态`）基础上叠加「记忆轴」：让 Agent **记得过去**（长期记忆）、**不爆上下文**（动态压缩）、**跑得起长 prompt**（cache_control 缓存）。
+> 公式：`demo2 = base × 记忆`——系列六轴中的记忆轴；代码上是 demo1 四文件 + 新增 `memory.py`（记忆层）/ `session.py`（会话层）两个层，工具层一字不动。
 
-## 文档导航
-
-- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（含口播 / 表格 / 代码 / 运行时序）
-  1. 结论：demo2 比 demo1 多了什么
-  2. 记忆的两层：会话持久化与跨会话记忆
-  3. 会话内窗口管理一：动态压缩（compact_messages）
-  4. 会话内窗口管理二：Prompt caching
-  5. 示例解读：实测四机制
-  6. 局限与工业级演进
-
-概念讲解、设计原理、演进方向全部在讲稿里。本 README 只讲**怎么跑起来**。
-
-## 关键文件
-
-| 文件 | 说明 |
-|---|---|
-| `agent.py` | 主入口：客户端 + ReAct 主循环（compact 触发 + cache 统计）+ REPL |
-| `tools.py` | 工具层（同 demo1：schema + 4 工具 + 路由表） |
-| `render.py` | 渲染层（demo1 版 + `print_cache_stats` 缓存命中统计） |
-| `memory.py` | **记忆层**：项目级记忆 + compact + caching（记忆轴机制与可调参数） |
-| `session.py` | **会话层**：`memory/<会话ID>.jsonl` 会话持久化 + `/resume` 恢复 |
-| `commands.py` | 命令层：`/help` `/status` `/memory` `/resume` `/new` `/compact` `/quit` |
-| `讲稿.md` | 教学讲稿 |
-| `memory/` | 运行时生成的双层记忆目录（已 gitignore）：**项目级** `MEMORY.md`（模型自主维护的持久事实，跨会话加载进 system prompt——对齐 Claude Code 的 MEMORY.md）+ **会话级** `<会话ID>.jsonl`（完整 messages，`/resume` 恢复） |
-
-## 运行
+## 快速开始
 
 ### 安装依赖
 
@@ -43,23 +17,21 @@ pip install -r requirements.txt
 
 网关、模型、超时已在代码里写死，**只需配置 API Key**（按优先级）：
 
-**方式 1：环境变量（推荐，可持久化）**
+1. 环境变量（推荐，可持久化）：
 
-```bash
-export ANTHROPIC_API_KEY=你的智谱Key    # Key 格式 id.secret，在 bigmodel.cn 生成
-```
+   ```bash
+   export ANTHROPIC_API_KEY=你的智谱Key    # Key 格式 id.secret，在 bigmodel.cn 生成
+   ```
 
-**方式 2：运行时交互式提示**
+2. 未设环境变量直接运行，会提示输入（不持久化，每次运行都要重输）。
 
-未设环境变量直接运行，会提示输入（不持久化，每次运行都要重输）。
-
-### 启动 Agent
+### 启动
 
 ```bash
 python -X utf8 agent.py
 ```
 
-进入交互模式后输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」）。对话中出现值得跨会话记住的持久事实时，模型会自主用 `write_file` / `edit` 更新 `memory/MEMORY.md`（模型自主维护，对齐 Claude Code）；下次启动时其内容加载进 system prompt。
+进入交互模式后输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」）。斜杠命令：
 
 | 命令 | 作用 |
 |---|---|
@@ -71,7 +43,9 @@ python -X utf8 agent.py
 | `/compact` | 手动压缩会话历史（跳过阈值，老消息摘要成一段并全量重写会话文件） |
 | `/exit` `/quit` | 退出程序 |
 
-> **管道自动跑**：`printf '任务\n/quit\n' | python -X utf8 agent.py`——非终端环境下 render 自动降级（`input()` + 去色），退出必须用 `/quit`（裸词退出已移除）。
+> **注 1**：管道自动跑——`printf '任务\n/quit\n' | python -X utf8 agent.py`；非终端环境下 render 自动降级（`input()` + 去色），退出必须用 `/quit`（裸词退出已移除）。
+>
+> **注 2**：另有 `USE_THINKING` 思考模式开关（`agent.py` 顶部，默认关闭，同 demo1）。
 
 ### 可调参数（`memory.py` 顶部）
 
@@ -82,6 +56,494 @@ python -X utf8 agent.py
 | `COMPACT_KEEP_RECENT` | 4 | compact 时保留最近 N 条原始消息 |
 | `USE_CACHE_CONTROL` | True | 是否启用 prompt caching；某些兼容网关不支持时可关掉 |
 
-> 另有 `USE_THINKING` 思考模式开关（`agent.py` 顶部，默认关闭，同 demo1）。
+> 运行时会在当前目录生成 `memory/` 目录（已加入 `.gitignore`）：项目级 `MEMORY.md` + 会话级 `<会话ID>.jsonl`——每个用户的记忆不同，不应提交。
 
-> 运行时会在当前目录生成 `memory/` 目录（已加入 `.gitignore`）：项目级 `MEMORY.md` + 会话级 `<会话ID>.jsonl`，每个用户的记忆不同，不应提交。
+---
+
+## 1. 结论：demo2 比 demo1 多了什么
+
+demo1 的 Agent 有三个根本限制：
+
+1. **重启就忘**：会话内消息倒是连续的，但 messages 不落盘——**进程一退，全都没了**。
+2. **消息单调累积**：多轮 ReAct 一直在 `messages` 上累积，跨任务也只增不减——**会话越长，上下文窗口越容易被撑爆**。
+3. **固定前缀重复传输**：每次请求都把整个 system prompt + memory 原样重发一遍，**重复传输**。
+
+demo2 就是要补上这三块——**会话持久化与跨会话记忆 / 短期压缩 / Prompt caching**。这就是「记忆轴」的全部内容：
+
+| 维度 | demo1 | demo2 |
+|---|---|---|
+| **工具集** | execute_bash / read_file / write_file / edit | **不变** |
+| **ReAct 单步循环** | ✅ | ✅ **不变** |
+| **会话持久化 + 跨会话记忆** | ❌ 重启进程 messages 就丢 | ✅ `memory/<会话ID>.jsonl` + `/resume`；`MEMORY.md` 模型自主维护 |
+| **会话内动态压缩** | ❌ messages 单调累积 | ✅ `compact_messages` 触发时滚动摘要 |
+| **Prompt caching** | ❌ system prompt 每次重发 | ✅ `cache_control` breakpoint，命中后服务端复用无需重传 |
+
+### 代码层的变化
+
+demo1 四文件 → demo2 六文件：**新增两个层，改了三个文件，工具层一字不动**。
+
+| 文件 | demo1 | demo2 的变化 |
+|---|---|---|
+| `memory.py` ★新增 | — | **记忆层**：MEMORY.md 加载 + system prompt 组装（含维护指引）、`compact_messages` 全家、cache_control 参数构建 |
+| `session.py` ★新增 | — | **会话层**：会话 jsonl 存取（增量追加 / 全量重写 / 载入）、历史会话扫描、会话 ID |
+| `agent.py` | 主循环：ReAct | 主循环新增三件事——每任务开始把 MEMORY.md 拼进 system prompt（走 cache_control）；run_agent 循环前查阈值，到了先压缩再开工；任务结束增量落盘 + 记忆回顾一次（提醒不强制） |
+| `commands.py` | `/help` `/status` `/exit` `/quit` | 扩到 8 个命令（+ `/memory` `/resume` `/new` `/compact`） |
+| `render.py` | 分色输出 | + `print_cache_stats`（每轮缓存命中一行） |
+| `tools.py` | 4 个基础工具 | **不变** |
+
+表格最后一行是关键——**记忆轴一个新工具都没加**。MEMORY.md 的维护用的就是 demo1 已有的 `write_file` / `edit`；加的是 Runtime 的两个「层」，不是模型的新能力。模型唯一「多会」的事——判断什么值得记——靠 system prompt 指引完成。
+
+---
+
+## 2. 记忆的两层：会话持久化与跨会话记忆
+
+### 为什么需要记忆
+
+Claude Code、Cursor 这类工具在一个长会话里，能记住用户之前说过什么、做过什么。而 demo1 的 Agent——**messages 不落盘，重启进程就全没了**（会话内倒是连续的，可它只增不减，越滚越贵）。
+
+那为什么不直接用大模型自己的记忆？因为**大模型本质上没有真正的记忆**——它只有一个**有限的上下文窗口**，窗口塞满就溢出。而且这个窗口也托付不得：同一个项目可能开多个终端窗口并发跑，每个窗口在模型侧的上下文互相独立，谁也看不到谁。所以记忆必须做在**本地**。
+
+记忆本质上是一个信息搬运问题：
+
+| 角色 | 能力 | 限制 |
+|---|---|---|
+| **大模型** | 有一定上下文窗口、有一定推理能力 | 窗口有限，**没有真正的持久记忆** |
+| **本地 Agent** | 可以读写外部存储（文件/数据库/向量库） | 搬运什么、搬多少，要自己决定 |
+
+**记忆 = 把外部存储的信息，有选择地搬运进 prompt**。所有方案的区别，就是「**存在哪、以什么形式存、如何选择搬入上下文**」三个问题的不同答案。
+
+### 2.1 双层记忆：录像带与记事本
+
+demo2 把记忆放进 `memory/` 目录，按**粒度**分两层——这正是 Claude Code 的做法（`~/.claude/projects/*.jsonl` + `MEMORY.md`）：
+
+| 层 | 文件 | 内容 | 用途 |
+|---|---|---|---|
+| **会话级** | `memory/<会话ID>.jsonl` | **完整 messages**，一行一条、只追加 | 「那盘录像带」——`/resume` 恢复后接着聊 |
+| **项目级** | `memory/MEMORY.md` | **模型自主维护的持久事实**（偏好/约定/结论） | 「记事本」——跨会话的知识，每次启动进 system prompt |
+
+一句话分工：**jsonl 记住「那一次会话发生了什么」，MEMORY.md 记住「值得永远记住的事」**。
+
+### 2.2 会话级：jsonl 持久化 + /resume
+
+会话 ID 用时间戳（如 `20261007_031512`）——自描述、按文件名自然排序。存取就四个函数：
+
+```python
+SESSIONS_DIR = "memory"
+
+def append_messages(session_id: str, messages: list) -> None:
+    """增量追加（一行一条）。目录/文件惰性创建——第一轮对话结束才落盘"""
+    path = session_file(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        for msg in messages:
+            f.write(json.dumps(_to_jsonable(msg), ensure_ascii=False) + "\n")
+
+def load_history(session_id: str) -> list:
+    """读取整个会话文件还原 messages 列表（dict 形态 API 直接认）"""
+    ...
+```
+
+两个设计点：
+
+1. **jsonl 一行一条、只追加**——文件天然按时间有序，增量写盘零改写
+2. **惰性创建**——启动不建文件，第一轮对话结束才落盘，避免积累一堆空会话
+
+`/resume` 恢复 = 扫目录（按修改时间排序）+ 只读首行取摘要 + 载入历史 + **切换会话 ID**（不切的话，恢复后的新消息会写进启动时的新文件，同一段对话被劈成两个文件）。
+
+**为什么历史填回去就算「恢复」？**——模型是无状态的，所谓会话只是每次请求带上的 messages 数组。历史填回去了，下一轮请求带着它们发出去，模型自然「记起」了之前聊过什么。
+
+唯一的例外是 **compact**——它会改写历史（摘要替换老消息），改写发生的那一刻就**全量重写**会话文件，之后的新消息继续按增量追加（详见 §3）。
+
+### 2.3 项目级：MEMORY.md 模型自主维护
+
+跨会话知识怎么存？最容易想到的是「任务结束自动写一条摘要日志」——但那更像浏览器历史，不是记忆。**Claude Code 的做法是让模型自主维护**：`MEMORY.md` 由模型自己判断什么值得持久化、用普通文件工具（write_file / edit）选择性写入。
+
+demo2 原样照搬，核心就一段 system prompt 指引：
+
+```python
+MEMORY_GUIDANCE = """
+
+## 记忆维护指引
+
+以上记忆文件（memory/MEMORY.md）由你维护：当对话中出现值得跨会话记住的
+持久事实（用户偏好、项目约定、关键结论），主动用 write_file 或 edit 更新它——
+只记事实、保持精炼，琐碎的过程不要写。没有值得记的，就不用写。"""
+```
+
+**不需要任何新工具**——read_file / write_file / edit demo1 就有，记忆写入只是「换个地方用它们」。这个设计的深意：**记忆是模型的能力，不是 Runtime 的副作用**。
+
+写入侧还有一道兜底：**任务结束时回顾一次**。主循环在每次任务收尾调用 `review_memory`——带着会话末尾再问模型一遍「有没有值得跨会话记住的持久事实」，有就让它用 write_file / edit 更新，没有就直接结束——**提醒一次，不强制**。纯靠对话中自发写入，模型可能当场没想到写；收尾一问，重要事实就不容易漏。实测两种结果都会出现：已经写过的回顾判「无需更新」；对话中没写的，回顾时提炼出「运行环境是 Windows，优先用 python -c」这类环境事实补进 MEMORY.md。
+
+加载侧：每次任务开始，`build_system_prompt` 把 MEMORY.md 内容 + 指引拼进 system prompt。文件应该保持精炼（自主维护的职责），50 行截取只是**防止上下文无限增长**。
+
+system prompt 的三层结构：
+
+```
+┌─────────────────────────────────────────────┐
+│  System Prompt                              │
+│  ┌───────────────────────────────────────┐  │
+│  │  基础 Prompt（身份 + 工具 + 工作流程）  │  │
+│  └───────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────┐  │
+│  │  跨会话记忆（MEMORY.md 内容，动态）      │  │  ← demo2 新增
+│  └───────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────┐  │
+│  │  记忆维护指引（何时/如何更新 MEMORY.md） │  │  ← demo2 新增
+│  └───────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
+```
+
+注意：**system prompt 整个任务内不变**——MEMORY.md 的更新发生在任务之间的对话里，任务进行中不会重读。这给 caching 创造了条件（§4）。
+
+### 2.4 从 demo2 抽象出 Memory 的三个核心问题
+
+为什么用文件？向量数据库（embedding 相似度 top-K）曾是热门方案，但记忆的难点在「**挑什么值得记**」，不在「检索召回」——所以 Claude Code 这代 coding agent 都回到了**文件**：可直接查看编辑、可进 git，模型用现成的文件工具就能自主维护。demo2 的 `memory/` 目录（MEMORY.md + 会话 jsonl）就是这条路线的最简版。
+
+无论哪条路线，所有 Memory 系统最终都可以抽象成三个问题：
+
+- **存在哪**（Storage）
+- **以什么形式存**（Representation）
+- **如何选择搬入上下文**（Retrieval）
+
+---
+
+## 3. 会话内窗口管理一：compact_messages
+
+### 3.1 长会话的真实痛点
+
+持久化解决了「重启就忘」，但**会话内**还有个致命问题——每轮 ReAct 都把 `assistant` 回复 + `tool_use` + `tool_result` 全部 append 进 messages，**单调增长，无任何裁剪**。轮次一多，最后撞上下文窗口上限，API 报错，任务失败。
+
+Claude Code 怎么解决？——`auto-compact`：接近窗口上限时，让 LLM 把老消息摘要成一段，接着跑（也提供手动 `/compact`）。demo2 实现最简版：`compact_messages`。
+
+### 3.2 触发条件 + 摘要策略
+
+`compact_messages` 做两件事：
+
+1. **什么时候触发**：两条路——**自动**：主循环在 **`run_agent` 循环之前**检查（`handle_command` 之后），上个任务或恢复的会话攒下的消息到阈值（demo2 用 **12 条**，演示用低阈值；生产级按 token 占比 ~80% 触发）就先压缩再开工；**手动**：`/compact` 命令（`force` 跳过阈值，用户自己决定压缩时机，对应 Claude Code 的 `/compact`）
+2. **怎么压缩**：保留最近 N 条原始消息（demo2 保留 **4 条**），老消息让 LLM 按**三段结构**摘要——① 用户请求与意图（**原话逐字保留**，不转述）② 关键结果与决策（文件路径/数字/结论/修复过的坑）③ 当前进度与下一步；丢弃重复试错
+
+compact_messages 的工作原理（数字取自 §5.3 案例 3 的真实触发）：
+
+```
+压缩前 messages（13 条——上个任务攒下，下一次 run_agent 前触发）:
+┌─────────────────────┐
+│  [0]  user          │  ← 老 messages
+│  [1]  assistant ...  │     （9 条，
+│  [2]  user          │      让 LLM 摘要）
+│  ...                │
+│  [8]  user          │
+├─────────────────────┤
+│  [9]  assistant ...  │  ← 最近 4 条
+│  [10] user          │     （保留原始）
+│  [11] assistant ...
+│  [12] user
+└─────────────────────┘
+             ↓ compact_messages()
+压缩后 messages（6 条）:
+┌─────────────────────┐
+│  [0] user: [历史对话  │  ← 摘要注入
+│      已压缩，摘要如   │
+│      下] ...         │
+│  [1] assistant: 好的 │     （配合 ack）
+├─────────────────────┤
+│  [2-5] 最近 4 条原始  │  ← 直接搬过来（原 [9-12]）
+└─────────────────────┘
+```
+
+### 3.3 代码实现
+
+```python
+COMPACT_THRESHOLD_MESSAGES = 12   # 触发阈值（演示用低值，方便短任务就触发）
+COMPACT_KEEP_RECENT        = 4    # 保留最近 N 条
+
+def _is_tool_result_message(msg) -> bool:
+    """判断 message 是否为「承载 tool_result 的 user 消息」"""
+    # （与触发它的 assistant tool_use 配对，切开就会破坏配对）
+    ...
+
+def _find_recent_start(messages: list) -> int:
+    """找 recent 段起始 index，遇到 tool_result 消息就向前回退一步。"""
+    start = max(1, len(messages) - COMPACT_KEEP_RECENT)
+    while start > 1 and _is_tool_result_message(messages[start]):
+        start -= 1
+    return start
+
+def compact_messages(messages: list, client, model: str, verbose: bool = False) -> list:
+    if len(messages) < COMPACT_THRESHOLD_MESSAGES:
+        return messages
+
+    # 切点保护：不能让 recent 第一条是 tool_result（会切断 tool_use ↔ tool_result 配对）
+    recent_start = _find_recent_start(messages)
+    old_messages = messages[:recent_start]
+    recent_messages = messages[recent_start:]
+
+    # 把老 messages 转成 transcript 文本（统一处理 dict / SDK block 对象）
+    transcript_parts = []
+    for msg in old_messages:
+        role = msg.get("role", "?")
+        text = _extract_text(msg.get("content", ""))
+        transcript_parts.append(f"### {role}\n{text}")
+    transcript = "\n\n".join(transcript_parts)
+
+    # 让 LLM 摘要
+    response = client.messages.create(
+        model=model,
+        max_tokens=1024,
+        system=COMPACT_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": f"对话历史：\n\n{transcript}\n\n请输出压缩摘要："}],
+    )
+    summary = "".join(b.text for b in response.content if b.type == "text")
+
+    # 把摘要注入成 [历史对话摘要] 标记消息，让后续 LLM 知道这是压缩过的上下文
+    summary_msg = {"role": "user",
+                   "content": (
+                       f"[历史对话已压缩，摘要如下]\n{summary}\n"
+                       "请基于摘要继续工作，不要向用户复述摘要。"
+                   )}
+    ack_msg = {"role": "assistant",
+               "content": "好的，我已了解历史对话摘要，继续执行当前任务。"}
+
+    return [summary_msg, ack_msg] + recent_messages
+```
+
+主循环在 **`run_agent` 循环之前**检查（`handle_command` 之后）：`len(state.history) >= COMPACT_THRESHOLD_MESSAGES` 就压缩，**就地替换活历史**（`history[:] = ...`）。注意 `client` / `model` 由调用方传入——记忆层不持有全局 client。
+
+### 三个设计要点
+
+| 选择 | demo2 做法 | 为什么 |
+|---|---|---|
+| **触发条件** | 自动：run_agent 循环前按条数（12 条，演示用低阈值）；手动：`/compact`（force 跳过阈值） | 简单可测；生产级在每次请求前按 token 占比 ~80% 检查 |
+| **保留策略** | 最近 4 条原始不动 + 切点边界保护 | 最近一轮的 tool_use / tool_result 必须完整，否则 LLM 不知道当前进度 |
+| **摘要注入** | 标记消息（三段摘要 + 「基于摘要继续，不要复述」）；assistant ack | 让 LLM 知道这是压缩摘要而非新指令；ack 保持 user/assistant 交替结构 |
+
+### 关键陷阱
+
+**为什么必须保留最近 N 条原始？**因为 Anthropic API 要求 messages 末尾如果是 `tool_use`，下一条必须是 `tool_result`；如果 messages 末尾是 `user`，下一条必须是 `assistant`。压缩时一刀切会破坏这个结构。
+
+`COMPACT_KEEP_RECENT=4` 通常能覆盖最近一轮完整的 `tool_use + tool_result` 对，但**固定条数不够保险**——万一落在 tool_result 上，前缀注入的 `summary_msg(user) + ack_msg(assistant)` 会切断它与触发它的 assistant tool_use 的配对，导致 API 报 `tool_result without preceding tool_use`。
+
+demo2 用 `_find_recent_start` 显式做切点边界保护：从 `len(messages) - COMPACT_KEEP_RECENT` 起步，如果切点正好压在一条 tool_result 消息上，就**向前回退一步**，直到切点落在安全的消息上。
+
+**compact 与会话落盘的交互**：自动压缩发生在主循环里 **`run_agent` 循环之前**（`handle_command` 之后）。落盘规则只有一条：**内存怎么变，文件就怎么写**——`run_agent` 期间纯追加，任务结束把新增消息批量 `append`；compact 改写历史的那一刻立即全量重写（`rewrite_session`），两者始终一致。
+
+> 检查时机放在 run_agent 循环前是最简做法；生产级（如 Claude Code 的 auto-compact）在**每次请求前**检查 token 水位——长任务可能在 ReAct 循环里一口气跑几十轮，中途不会回到主循环，撑爆窗口了都没机会检查，所以工业版把检查放进每轮循环里。教学版任务都短，循环前检查够用。
+
+**工业做法：压缩前存档**。摘要终究是有损压缩——六段里逐字保住的只有用户消息和最近几条对话，中间某轮的报错原文压缩后就找不回来了。工业实现在重写会话文件前，会先把完整对话拷贝一份存档到 `compact-history/` 子目录（时间戳命名，多次压缩多份存档），并在摘要消息里附上存档路径——压缩后问「刚才那个报错原文」，模型用 `read_file` 翻存档就能找回。存档放子目录还有个原因：`/resume` 的目录扫描不递归，存档不会混进可恢复会话列表。**摘要成了索引，完整存档是兜底**。教学版不实现这层，知道思路即可。
+
+---
+
+## 4. 会话内窗口管理二：Prompt caching
+
+### 4.1 问题：每次请求重发整个 system prompt
+
+压缩之外，还有一个**传输效率问题**。
+
+demo1 的每次 API 调用，messages 长这样：
+
+```
+[
+  {"role": "system", "content": "<基础 prompt + MEMORY.md + 指引>"},
+  {"role": "user",   "content": "统计 .py 文件"},
+  {"role": "assistant", "content": "..."},
+  {"role": "user",   "content": "<tool_result>"},
+  ...
+]
+```
+
+**system prompt 部分整个任务内不变**——但每次请求都要重发一遍。如果 task 跑 30 轮 ReAct，**system prompt 被发 30 次，全部是重复传输**。
+
+如果是 Claude Code 这种工业 Agent，system prompt 里塞了 CLAUDE.md（项目约定）+ auto-memory（跨会话记忆）+ skill descriptions（技能说明），随便就 10k+ tokens。30 轮 ReAct × 10k tokens = 30 万 tokens **全是重复传输**。
+
+### 4.2 cache_control breakpoint
+
+Anthropic API 允许在 system blocks 上加 `cache_control` 标记，告诉服务端：「**到这里为止的内容如果没变，就给我命中缓存**」。
+
+```python
+# demo1 做法：纯字符串
+response = client.messages.create(
+    system=system_prompt,
+    ...
+)
+
+# demo2 新做法：blocks + cache_control（memory.py 的 build_system_param）
+response = client.messages.create(
+    system=[
+        {
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ],
+    ...
+)
+```
+
+缓存命中机制：
+
+```
+第 1 次请求（缓存未建）:
+    client → [system (10k) + messages (2k)] → server
+    server → 计算 10k tokens，建缓存，存 5min
+    server → 返回结果 + usage.cache_creation_input_tokens=10000
+
+第 2 次请求（缓存命中，5min 内 + system 没变）:
+    client → [system (10k) + messages (5k)] → server
+    server → 命中缓存！system 段直接复用，只处理 5k 新 tokens
+    server → 返回结果 + usage.cache_read_input_tokens=10000  ← 无需重传
+```
+
+### 4.3 为什么留一个开关
+
+`USE_CACHE_CONTROL = True` 开关的存在原因：智谱 BigModel 等 Anthropic 兼容网关，不一定实现了 caching 后端——API 接口可能接受 `cache_control` 字段但不实际缓存，或直接报错。开关在的时候，遇到不支持就关掉，**Agent 仍然能跑**，只是失去缓存优势。
+
+**这是个工程实践细节**：生产级 Agent 接到任意网关，需要 graceful degradation（优雅降级）。
+
+### 4.4 命中统计：让 caching 效果可见
+
+```python
+def print_cache_stats(usage, use_cache_control: bool = True) -> None:
+    cache_create = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    cache_read   = getattr(usage, "cache_read_input_tokens", 0) or 0
+    input_tokens = getattr(usage, "input_tokens", 0) or 0
+
+    if cache_create > 0:
+        console.print(f"[dim]  \\[cache] 创建缓存 {cache_create} tokens + 输入 {input_tokens}[/]")
+    elif cache_read > 0:
+        console.print(f"[green]  \\[cache] 命中缓存 {cache_read} tokens + 输入 {input_tokens} ✓[/]")
+    elif use_cache_control:
+        # cache_control 发了但本轮网关没返回命中数据——可能是网关内部缓存策略
+        # （大小上限 / TTL 短），也可能是兼容网关根本不实现 caching 后端
+        console.print(f"[dim]  \\[cache] 未命中 / 输入 {input_tokens} tokens[/]")
+    else:
+        console.print(f"[dim]  \\[cache] caching 关闭 / 输入 {input_tokens} tokens[/]")
+```
+
+教学上**让 caching 效果可见很重要**——每轮 ReAct 在决策打印之后跟一行 cache hit/miss 统计。
+
+第三个分支「发了 cache_control 但没命中也没创建」处理的是兼容网关行为诡异的情况——智谱 BigModel 等网关未必实现 caching 后端，具体实测见 §5.3。
+
+---
+
+## 5. 实测四机制（智谱 BigModel 网关真实运行）
+
+三个案例把「跨会话记忆 / 会话持久化 / compact / caching」完整演示一遍（2026-10-07/08 实测，日志为 rich 渲染的管道运行输出）：
+
+- **案例 1**：`记住：我最喜欢的数字是 42` —— 空记忆起步，看模型**自主维护** MEMORY.md；`/new` 换新会话后跨会话召回
+- **案例 2**：`/resume` 恢复历史会话 —— 回放 + 续聊 + 追加落盘
+- **案例 3**：六步任务 + 构造数据 —— cache 真实命中 + compact 触发全流程
+
+### 5.1 案例 1 实测：模型自主维护 MEMORY.md + 跨会话召回
+
+首次运行，`memory/` 目录为空：
+
+```
+[记忆] memory\MEMORY.md 为空或不存在（首次运行）
+❯ 记住：我最喜欢的数字是 42
+stop_reason = tool_use
+⏺ tool_call   | write_file({'path': 'memory/MEMORY.md',
+                   'content': '# Memory\n\n- 用户最喜欢的数字是 42\n'})
+✔ tool_return | [成功] 文件已写入: memory/MEMORY.md (25 字符)
+● assistant   | 好的，我记住了：你最喜欢的数字是 **42**。😊
+```
+
+**模型自己调用了 write_file**——system prompt 里的维护指引起了作用，而且写入的内容干净利落：一条持久事实，没有时间戳、没有任务过程。这就是模型的自主维护。`/memory` 命令查看：
+
+```markdown
+# Memory
+
+- 用户最喜欢的数字是 42
+```
+
+`/new` 开一个全新会话（活历史清零、换新会话 ID），再问：
+
+```
+已开启新会话 20261008_032123
+[记忆] 已加载 memory\MEMORY.md（3 行）:
+❯ 我最喜欢的数字是多少？只依据跨会话记忆回答
+● assistant   | 根据跨会话记忆，你最喜欢的数字是 **42**。😊
+```
+
+会话是新的、历史是空的——42 **只能**来自 system prompt 里的 MEMORY.md。跨会话记忆闭环成立。
+
+### 5.2 案例 2 实测：/resume 恢复历史会话
+
+重启进程（上次会话的消息全在磁盘上），输入 `/resume`：
+
+```
+--- 历史会话（新 → 旧）---
+1. 10-07 02:49  20261007_024907  记住：我最喜欢的数字是 42
+输入编号恢复（回车取消）: 1
+已恢复会话 20261007_024907，共 2 条消息：
+❯ user        | 记住：我最喜欢的数字是 42
+● assistant   | 好的，我记住了：你最喜欢的数字是 **42**。😊
+```
+
+列表来自扫目录（按修改时间排序），摘要是**只读文件第一行**取的首条用户输入。选中后载入历史回放，接着聊：
+
+```
+❯ 我最喜欢的数字是多少？
+● assistant   | 根据本次会话历史，你最喜欢的数字是 **42**。😊
+```
+
+「根据**本次会话历史**」——这次 42 来自恢复的 jsonl，不是 MEMORY.md。续聊的两条新消息追加进同一会话文件（2 → 4 行），因为恢复时把会话 ID 切回了旧会话。
+
+### 5.3 案例 3 实测：caching 命中 + compact 全流程
+
+六步任务（列文件 / 数行数 ×4 / 写汇总）真实运行，每轮的 cache 统计：
+
+```
+  [cache] 未命中 / 输入 625 tokens
+  ...
+  [cache] 未命中 / 输入 732 tokens
+  ...
+  [cache] 命中缓存 704 tokens + 输入 161 tokens ✓
+```
+
+前几轮网关不报告缓存创建（兼容网关的典型行为），但第三轮起 `cache_read=704` 出现——**网关其实悄悄建了缓存**。这就是 §4「graceful degradation」的真实样子：第三分支的「未命中」不是失败，只是网关不报创建。
+
+compact 的自动触发时机是 **run_agent 循环前**，所以六步串行任务本身不压缩（任务内只涨不查）——它把会话攒到 13 条后，**第二个任务**（"再算一次 1+1"）的 run_agent 循环前，主循环阈值检查触发（2026-10-08 实测）：
+
+```
+[compact] 触发：13 条老消息 → 摘要
+[compact] 保留最近 4 条原始消息
+[compact] 摘要: 1. 用户请求与意图 用户原话："依次完成六件事，一次只执行一件，
+              不要并发：1) 列出当前目录 py 文件名 2) 计算 35+47 ..." 2. 关键结果
+              与决策 ... 3. 当前进度与下一步 ...
+[compact] 压缩后：6 条消息
+[会话] compact 改写历史，已全量重写 memory\20261008_124446.jsonl
+```
+
+13 条 → 摘要 9 条 + 保留 4 条 → 重建 6 条，与 §3.2 的示意图完全一致；随后第二个任务照常运行，新消息按增量追加进同一文件。想不等阈值、立即压缩，用 `/compact`（force 跳过阈值）。
+
+### 5.4 三案例汇总：四个机制的实测状态
+
+四个机制在三案例中的触发情况：
+
+| 机制 | 案例 1（自主维护+召回） | 案例 2（/resume） | 案例 3（压缩+缓存） |
+|---|---|---|---|
+| **MEMORY.md 自主维护** | **1 次写入**（模型自主 write_file） | — | — |
+| **跨会话记忆加载** | **1 次**（/new 后召回） | — | — |
+| **会话持久化** | 会话文件落盘 | **恢复 + 回放 + 续聊追加（2→4 行）** | 会话文件落盘 |
+| **caching** | 命中若干 | — | **命中 704 tokens ✓** |
+| **compact** | 0 次（未到阈值） | 0 次 | **1 次**（13 → 6 条） |
+
+### 设计精髓
+
+**四个机制是正交的**——任意组合都可以，独立开关，互不依赖。案例 1 只触发「自主维护 + 加载」；案例 2 只触发「持久化」；案例 3 触发「caching + compact」。**这就是真实 Agent 运行的样子**：机制按需启用，不是每轮都触发。
+
+---
+
+## 6. 局限与工业级演进
+
+demo2 的记忆轴是**最简实现**，每个子机制都有明显的粗糙之处。本章对照工业级 Agent（Claude Code / Cursor / Devin）说明各子机制的优化方向：
+
+| 子机制 | demo2 局限 | 工业级做法 |
+|---|---|---|
+| **跨会话记忆** | 单文件 MEMORY.md 全量注入 + 50 行上限 | 分层（CLAUDE.md 项目级 + 用户级 auto-memory） |
+| **会话存储** | 项目内 memory/ 目录、时间戳会话 ID | `~/.claude/projects/<项目路径转码>/<uuid>.jsonl` 按项目分目录 + 每行带 sessionId/parentUuid 元数据（支持分支） |
+| **compact 触发** | 消息条数（12 条，演示用低阈值） | token 占比（~80% 上下文窗口）+ 手动 `/compact` |
+| **compact 目标** | 固定保留 4 条 | 自适应：保留最近一轮完整 + 关键决策摘要 |
+| **caching breakpoint** | 1 个（system 末尾） | 多个（system + tools + 部分固定 messages） |
+| **caching TTL** | 5min（ephemeral） | 5min / 1h 可选 |
+
+> 轴覆盖的权威矩阵见仓库根目录 [README](../README.md)「轴清单 × 内容矩阵」。

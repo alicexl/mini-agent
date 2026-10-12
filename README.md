@@ -2,7 +2,7 @@
 
 > 用 6 个递进的最简 demo（从 demo1 的 4 文件约 600 行，到 demo6 的 13 文件约 3000 行）把 Claude Code / Cursor / Devin 这类"自动干活"工具的底层机制完全拆开。
 >
-> 每个目录下一份多文件实现（入口 `agent.py`，直接 `python agent.py` 跑通）+ 一份教学文档（设计解析 + 真实运行日志）——demo1 已并入其 `README.md`，demo2–6 为 `讲稿.md`（口播 + 屏显，配合视频讲解）。本文件是**顶层索引**——一张图看完 6 个 demo 的能力轴与解决的核心问题。
+> 每个目录下一份多文件实现（入口 `agent.py`，直接 `python agent.py` 跑通）+ 一份 `README.md`（快速开始 + 完整教学文档：设计解析 + 真实运行日志）。本文件是**顶层索引**——一张图看完 6 个 demo 的能力轴与解决的核心问题。
 
 一个先行的总纲：**Agent 效果 = LLM 能力 × Agent 工程**——模型决定「想得出下一步吗」，工程决定「想法能不能落地」，任何一方拉胯最终效果都上不去。本系列拆的是后者——Agent Runtime（见视角 D）。也正因为它讲的是工程层，与具体模型解耦：默认用 glm-5.2 跑通全部 demo，换官方 Claude 或其他兼容网关只改 `BASE_URL` / `MODEL` 两个常量。
 
@@ -64,7 +64,7 @@ python agent.py
 
 - **环境**：Python 3.9+；依赖见各 demo 的 `requirements.txt`（`anthropic` SDK + `rich` / `prompt_toolkit` 渲染层，demo3 的 MCP Client 另需 `requests`）
 - **网关 / 模型**：所有 demo 默认走**智谱 BigModel 的 Anthropic 兼容网关**（`https://open.bigmodel.cn/api/anthropic`）+ `glm-5.2` 模型——接口与 Anthropic SDK 完全兼容，换官方 API 或别的兼容网关只需改 `BASE_URL` / `MODEL`
-- **平台**：Windows 10 + Git Bash 实测跑通（讲稿里提到 `[ -f hello.txt ]` 在 Windows cmd 报错、LLM 自动切换 `set /a` cmd 内置算术、GBK 编码坑等真实跨平台问题）
+- **平台**：Windows 10 + Git Bash 实测跑通（教学文档里提到 `[ -f hello.txt ]` 在 Windows cmd 报错、LLM 自动切换 `set /a` cmd 内置算术、GBK 编码坑等真实跨平台问题）
 
 ---
 
@@ -170,20 +170,20 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 
 ## 六、各 demo 文件清单
 
-| Demo | 入口 | 核心新增文件 | 文档 |
-|---|---|---|---|
-| demo1 | `demo1-react/agent.py`（+ `agent_single.py` 原始单文件版；拆出 `tools.py` / `render.py` / `commands.py`） | — | `demo1-react/README.md`（教学文档已并入） |
-| demo2 | `demo2-memory/agent.py`（+ `tools.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `memory/` 双层记忆目录（运行时生成：MEMORY.md + 会话 jsonl） | `demo2-memory/讲稿.md` |
-| demo3 | `demo3-tools/agent.py`（+ `tools.py` / `mcp.py` / `render.py` / `memory.py` / `session.py` / `commands.py`）+ `mcp_server.py` | `memory/` 双层记忆目录（继承 demo2） | `demo3-tools/讲稿.md` |
-| demo4 | `demo4-plan/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（示例 Skill） | `demo4-plan/讲稿.md` |
-| demo5 | `demo5-multiagent/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `subagent.py` / `jobs.py` / `tui.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（继承 demo4） | `demo5-multiagent/讲稿.md` |
-| demo6 | `demo6-safety/agent.py`（+ demo5 十二文件底座 + `permission.py` 约束层） | —（约束层全在 `permission.py`） | `demo6-safety/讲稿.md` |
+| Demo | 入口 | 核心新增文件 |
+|---|---|---|
+| demo1 | `demo1-react/agent.py`（+ `agent_single.py` 原始单文件版；拆出 `tools.py` / `render.py` / `commands.py`） | — |
+| demo2 | `demo2-memory/agent.py`（+ `tools.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `memory/` 双层记忆目录（运行时生成：MEMORY.md + 会话 jsonl） |
+| demo3 | `demo3-tools/agent.py`（+ `tools.py` / `mcp.py` / `render.py` / `memory.py` / `session.py` / `commands.py`）+ `mcp_server.py` | `memory/` 双层记忆目录（继承 demo2） |
+| demo4 | `demo4-plan/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（示例 Skill） |
+| demo5 | `demo5-multiagent/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `subagent.py` / `jobs.py` / `tui.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（继承 demo4） |
+| demo6 | `demo6-safety/agent.py`（+ demo5 十二文件底座 + `permission.py` 约束层） | —（约束层全在 `permission.py`） |
 
 > demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2–6 全部已迁移多文件结构**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `skill.py` Skill 层 + `ask.py` 提问层；demo5 加 `subagent.py` 多 Agent 层（后台执行 + 完成通知）+ `jobs.py` 后台任务层（shell/agent job 共用注册表、日志落盘、通知注入）+ `tui.py` 行内渲染 TUI，基于 demo4 底座（规划轴三件 + 记忆全继承、无自动压缩；demo3 的 MCP 依赖模拟 server 不带）；demo6 基于 demo5 十二文件底座，加 `permission.py` 约束层（Permission 规则引擎 + Hook + `dispatch_tool` 串进共用循环 + 审批冒泡——Subagent 的 ask 入队挂起、主循环空闲弹层，主/子一体受控））。
 
 ### demo5 的定位
 
-demo5 只实现 **Subagent**（一次性外包，对应 Claude Code 的 Task tool / Cursor 的 agent / Devin 的子任务派发）。共享上下文的 **Fork agent** 变体在讲稿第 2 章讲机制、代码不实现。
+demo5 只实现 **Subagent**（一次性外包，对应 Claude Code 的 Task tool / Cursor 的 agent / Devin 的子任务派发）。共享上下文的 **Fork agent** 变体在 demo5 README §2.6 讲机制、代码不实现。
 
 ---
 
@@ -211,19 +211,19 @@ demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以�
 每个 demo 都有"真实运行回显"——教学文档里贴了实测日志（不是虚构），直接看：
 
 - demo1 README §3 — 统计 .py 文件数 + 写 count.txt（3 轮 ReAct）
-- demo2 §5 — 案例 1（统计 .py 文件，3 轮 ReAct + caching 命中）+ 案例 2（5 步串行任务，7 轮 ReAct + compact 触发）
-- demo3 §5 — 5 步任务混用本地四件套 + MCP 三件套（含 edit 只发增量改 weather.txt）
-- demo4 §5 — ask 主动提问 + plan 自动决策（含 plan×ask 联动）+ Skill 匹配触发
-- demo5 §3 — 耗时命令自动放后台 + Subagent 后台并行派发三个独立子任务
-- demo6 §2 / §3 — Permission deny 拦截 + Hook Pre/Post 回调
+- demo2 README §5 — 实测四机制（caching 命中 + compact 13→6 条 + MEMORY.md 自主维护 + `/resume` 恢复）
+- demo3 README §5 — 5 步任务混用本地四件套 + MCP 三件套（含 edit 只发增量改 weather.txt）
+- demo4 README §5 — ask 主动提问 + plan 自动决策（含 plan×ask 联动）+ Skill 匹配触发
+- demo5 README §3 — 耗时命令自动放后台 + Subagent 后台并行派发三个独立子任务
+- demo6 README §2 / §3 — Permission deny 拦截 + Hook Pre/Post 回调
 
 ---
 
-## 八、系列回顾（讲稿交叉引用）
+## 八、系列回顾
 
-每个 demo 的文档结尾都有一张轴回顾表（demo1 在 README「后续扩展轴」，demo2–6 在讲稿附录）。为了避免表格在多个文件里各自漂移，本 README 的「轴清单 × 内容矩阵」是**唯一权威表**——如发现任何 demo 文档里的进度表与本页不一致，以本页为准。
+轴覆盖的**唯一权威矩阵**是本 README 的「轴清单 × 内容矩阵」——各 demo 的 README 结尾只保留收尾公式与扩展轴路线，不各自维护进度表，避免多份表格漂移。
 
-各讲稿结尾的公式也应与上文「视角 A」对齐：
+各 demo README 结尾的收尾公式应与上文「视角 A」对齐：
 
 ```
 demo1: base = LLM × 工具 × 循环 × 状态

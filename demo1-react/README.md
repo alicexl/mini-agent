@@ -486,10 +486,10 @@ demo1–6 系列是**渐进扩展**的过程——每加一个 demo，就给 Age
 | Demo | 扩展轴 | 解决的问题 |
 |---|---|---|
 | **demo1**（本目录） | **ReAct 循环**（base） | Agent 最小心跳——决策 × 工具 × 循环 |
-| [demo2](../demo2-memory/讲稿.md) | **记忆** | 会话持久化（jsonl + `/resume`）+ 跨会话记忆（`MEMORY.md` 模型自主维护）+ 上下文动态压缩（`compact_messages`）+ caching |
-| [demo3](../demo3-tools/讲稿.md) | **工具** | 本地工具不够 → MCP 让工具跨进程/跨机器/跨语言服务化 |
-| [demo4](../demo4-plan/讲稿.md) | **规划** | ask 歧义先问；plan 让 LLM 拆步骤显式化；Skill 把常见工作流预固化成技能 |
-| [demo5](../demo5-multiagent/讲稿.md) | **多 Agent** | 单 Agent 上下文膨胀 → Subagent 一次性外包独立任务 + 后台任务机制（job 注册表 + 完成通知） |
-| [demo6](../demo6-safety/讲稿.md) | **约束** | 工具太自由（`rm -rf`）→ Permission 规则 + Hook 回调两层 Runtime Control |
+| [demo2](../demo2-memory/README.md) | **记忆** | 会话持久化（jsonl + `/resume`）+ 跨会话记忆（`MEMORY.md` 模型自主维护）+ 上下文动态压缩（`compact_messages`）+ caching |
+| [demo3](../demo3-tools/README.md) | **工具** | 本地工具不够 → MCP 让工具跨进程/跨机器/跨语言服务化 |
+| [demo4](../demo4-plan/README.md) | **规划** | ask 歧义先问；plan 让 LLM 拆步骤显式化；Skill 把常见工作流预固化成技能 |
+| [demo5](../demo5-multiagent/README.md) | **多 Agent** | 单 Agent 上下文膨胀 → Subagent 一次性外包独立任务 + 后台任务机制（job 注册表 + 完成通知） |
+| [demo6](../demo6-safety/README.md) | **约束** | 工具太自由（`rm -rf`）→ Permission 规则 + Hook 回调两层 Runtime Control |
 
 > 轴覆盖的权威矩阵见仓库根目录 [README](../README.md)「轴清单 × 内容矩阵」。

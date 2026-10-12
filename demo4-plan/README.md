@@ -1,53 +1,9 @@
-# Demo4 — 规划轴
+# Demo4 — 规划轴：ask / plan / Skill
 
-> 在 demo2（base × 记忆）基础上叠加规划轴——**plan（当前任务拆步骤）、Skill（历史经验复用）、ask_user_question（歧义时主动问用户）**。继承全部记忆能力（无自动压缩，同 demo3）。
+> 在 demo2（base × 记忆）底座上叠规划轴三件——**ask（歧义时主动问）、plan（当前任务拆步骤）、Skill（历史经验复用）**，补上 ReAct「走一步看一步」的短板，让 Agent 从「能执行」走向「能靠谱地执行」。
+> 系列第 4 轴：demo1 循环 → demo2 记忆 → demo3 工具（MCP）→ **demo4 规划** → demo5 多 Agent → demo6 约束。代码为九文件结构：`agent.py` + `tools.py` / `plan.py` / `skill.py` / `ask.py` + `render.py` / `memory.py` / `session.py` / `commands.py` + `skills/review.md`（示例 Skill）。
 
-## 文档导航
-
-- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（6 章）
-  1. 结论：demo4 比 demo2 多了什么
-  2. 机制一：ask_user_question（歧义时主动问）
-  3. 机制二：plan（当前任务的规划）
-  4. 机制三：Skill（历史经验的复用）
-  5. 真实演示案例
-  6. 总结
-
-## 关键文件
-
-| 文件 | 说明 |
-|---|---|
-| `agent.py` | 主入口：客户端 + ReAct 主循环（工具合并 + plan 调用后移除）+ REPL |
-| `tools.py` | 工具层（demo1 四件套，本地） |
-| `plan.py` | **规划层**：plan 工具（LLM 自判复杂度，调后从 tools 移除） |
-| `skill.py` | **Skill 层**：Skill 加载器 + use_skill（渐进式披露） |
-| `ask.py` | **提问层**：ask_user_question 方向键 UI + 非 TTY 降级（对齐 Claude Code 的 AskUserQuestion） |
-| `render.py` | 渲染层（demo2 版：分色 + cache 统计 + user 回放） |
-| `memory.py` | 记忆层（demo2 版减自动压缩） |
-| `session.py` | 会话层：`memory/<会话ID>.jsonl` 持久化 + `/resume` |
-| `commands.py` | 命令层：`/help` `/status` `/tools` `/skills` `/memory` `/resume` `/new` `/compact` `/quit` |
-| `skills/review.md` | 示例 Skill——代码审查工作流 |
-| `memory/` | 运行时生成的双层记忆目录（已 gitignore，同 demo2） |
-
-## 设计要点
-
-### 与 demo2 的差异
-
-- **新增 `plan.py`**（规划层）+ **`skill.py`**（Skill 层）+ **`ask.py`**（提问层）：规划轴的三个新机制
-- **无自动压缩**（同 demo3）：压缩只由 `/compact` 手动发起
-
-### plan：一次性规划
-
-LLM 自判任务复杂度——3 步以上、步骤间有依赖的任务先调 `plan` 列步骤（Agent 打印清单），**调用一次后从 tools 移除**（列完就放手，不反复管理进度）；简单任务直接干（描述里写了反向抑制）。描述里同时引导列完步骤先探索 / 提问澄清再执行（prompt 约束，不裁写工具）——Plan Mode 工业版的工具裁剪 / plan 文件 / ExitPlanMode 审批是演进方向，见讲稿第 2 章。
-
-### Skill：渐进式披露
-
-`skills/*.md`（YAML frontmatter：name/description/triggers）启动时扫描加载；**system prompt 只放元信息**（name + description + 触发词），正文由 LLM 按需经 `use_skill` 拉取——skill 再多也只增加少量元信息开销。
-
-### ask_user_question：歧义时主动问
-
-需求有歧义 / 有多种合理实现 / 拿不准方向时，LLM 调 `ask_user_question` 把问题抛给用户（1-4 题、每题 2-4 选项、选项带说明），而不是自作主张。UI 自动追加「其他（自定义输入）」；**非 TTY 环境（管道喂任务）自动降级**为逐题打印 + 读一行。
-
-## 运行
+## 快速开始
 
 ### 安装依赖
 
@@ -59,15 +15,18 @@ pip install -r requirements.txt
 
 ### 配置 API Key
 
-环境变量 `ANTHROPIC_API_KEY`（推荐，可持久化）；未设时启动交互式输入。
+环境变量 `ANTHROPIC_API_KEY`（推荐，可持久化；Key 格式 `id.secret`，在 bigmodel.cn 生成）；未设时启动交互式输入。
 
-### 启动 Agent
+### 启动
 
 ```bash
 python -X utf8 agent.py
 ```
 
-演示建议：
+进入交互模式后输入任务，即可观察规划轴三件的触发。斜杠命令 9 个：`/help` `/status` `/tools` `/skills` `/memory` `/resume` `/new` `/compact` `/quit`（`/skills` 为本目录新增——查看已加载 Skill 与触发词）。
+
+演示建议（三个机制的独立与组合，实测轨迹见 §5）：
+
 - **ask**：输入「帮我生成一个密码，如果不确定就问我」——类型/长度没说清，Agent 会主动提问（方向键选择或输入自定义答案）
 - **plan**：输入「我需要你做几件事：1) 读 plan.py 找出所有工具名 2) 整理成表格 3) 写入 inventory.md 4) 读回验证，注意步骤间有依赖」——先列步骤清单再干活
 - **plan + ask**：输入「帮我做一件事：1) 生成一批随机密码写入 passwords.txt；2) 写校验脚本检查长度和字符组成；3) 运行并汇报。注意步骤间有依赖。密码数量你拿不准就问我」——先问参数、再列计划、执行中校验自纠
@@ -84,3 +43,749 @@ python -X utf8 agent.py
 | `USE_CACHE_CONTROL` | True | 是否启用 prompt caching |
 
 > 另有 `USE_THINKING` 思考模式开关（`agent.py` 顶部，默认关闭）。
+
+---
+
+## 1. 结论：demo4 比 demo2 多了什么
+
+demo1 的 ReAct 循环走一步看一步——LLM 每轮只决策下一步。简单任务很优雅，但三个问题随之而来：
+
+1. **歧义需求容易自作主张**——用户没说清楚，LLM 就替你拍板
+2. **复杂任务容易跑偏**——走到第 3 步忘了整体目标
+3. **高频任务每次重新想**——同样的「代码审查」，每次从零推演，结果还不一样
+
+对应规划轴的三个机制：
+
+| 问题 | 机制 | 一句话 |
+|---|---|---|
+| 歧义时自作主张 | **ask_user_question** | 主动向用户提问——拿不准就问 |
+| 复杂任务跑偏 | **plan** | 当前任务的规划——拆步骤 |
+| 高频任务重想 | **Skill** | 历史经验的复用——套路模板 |
+
+demo4 的底座是 demo2——**记忆能力全继承**，demo3 的 MCP 不带（演示时需要模拟一个 mcp_server，所以去掉了），在上面叠规划轴三件：
+
+| 维度 | demo2 | demo4 |
+|---|---|---|
+| **本地工具集** | 4 个 | 7 个（四件套 + **plan / use_skill / ask_user_question**） |
+| **记忆 / 会话模型** | ✅ | ✅ **不变**（全继承；无自动压缩同 demo3） |
+| **规划轴** | ❌ | ✅ 三件：ask（歧义就问）/ plan（拆当前任务）/ Skill（复用经验） |
+| **命令** | 8 个 | 9 个（+ `/skills` 查看已加载 Skill） |
+
+### 代码层的变化
+
+demo2 六文件 → demo4 九文件：**新增三个层，微调两个文件，其余原样继承**。
+
+| 文件 | demo2 | demo4 的变化 |
+|---|---|---|
+| `ask.py` ★新增 | — | **提问层**：ask_user_question——方向键选择 UI + 非 TTY 降级，对齐 Claude Code 的 AskUserQuestion |
+| `plan.py` ★新增 | — | **规划层**：plan 工具——当前任务的规划（调一次即移除） |
+| `skill.py` ★新增 | — | **Skill 层**：Skill 加载器（正则解析 frontmatter，零依赖）+ use_skill + Skills 元信息段——历史经验的复用 |
+| `agent.py` | 主循环 | system prompt 四层叠加（基础 + MEMORY.md + Skills 元信息 + 提问指引）；工具合并为 7 个；plan 调用一次后移除 |
+| `commands.py` | 8 个命令 | + `/skills` |
+| `tools.py` / `render.py` / `memory.py` / `session.py` | 工具 / 渲染 / 记忆 / 会话 | **原样继承**（tools = demo1 四件套，本地；render 分色 + cache 统计 + user 回放；session 做 `memory/<会话ID>.jsonl` 持久化 + `/resume`） |
+| `skills/review.md` | — | 示例 Skill——代码审查工作流（完整内容见 §4.1） |
+| `memory/` | — | 运行时生成的双层记忆目录（已 gitignore，同 demo2） |
+
+分组那一行——**四个本地工具、记忆系统一行未动**。规划轴的全部代码长在三个新文件里。这就是轴式设计：demo4 = demo2 底座 × 规划。
+
+三个新工具进主循环的方式和 demo3 合并 MCP 工具一个道理——schema 格式一致，直接拼接：
+
+```python
+ALL_TOOLS = BASE_TOOLS + plan.PLAN_TOOLS + skill.SKILL_TOOLS + [ask.ASK_TOOL]
+AVAILABLE_FUNCTIONS = {**BASE_FUNCTIONS, **plan.PLAN_FUNCTIONS, **skill.SKILL_FUNCTIONS,
+                       "ask_user_question": ask.ask_user_question}
+```
+
+后文按「先问清楚、再拆步骤、再复用套路」的顺序展开：ask 管**没想清楚就先问**，plan 管**这一次怎么做**，Skill 管**这类事该怎么做**。
+
+---
+
+## 2. 机制一：ask_user_question——歧义时主动问
+
+### 问题：LLM 爱自作主张
+
+规划轴三件里最轻的一件。demo1-3 给 Agent 加的都是「往前冲」的能力——多给工具、多给记忆。还有一种场景恰恰相反：**用户没说清楚，Agent 该停下来问**。
+
+用户说「帮我生成一个密码」——什么类型？多长？LLM 硬着头皮也能猜，但猜错就要返工。成熟 Agent 的做法是：**不确定就问**。
+
+这就是 ask_user_question，对齐 Claude Code 的 **AskUserQuestion** 工具——Claude Code 遇到歧义会弹选择卡片问用户，demo4 把它实现出来。
+
+### 工具设计：结构化的问题列表
+
+```python
+ASK_TOOL = {
+    "name": "ask_user_question",
+    "description": (
+        "向用户提多选题，收集偏好、澄清歧义、让用户做决定。"
+        "**使用时机**：需求有歧义、有多种合理实现、拿不准方向时——先问再干，不要自作主张。"
+        "**约定**：UI 会自动追加「其他（自定义输入）」，不要在 options 里再列；"
+        "有推荐选项放第一个，label 末尾加「（推荐）」。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "description": "1-4 个问题",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "description": "完整问句，以问号结尾"},
+                        "header":   {"type": "string", "description": "≤12 字符的标签，渲染在 UI 顶部导航"},
+                        "options": {
+                            "type": "array",
+                            "description": "2-4 个选项",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label":       {"type": "string", "description": "选项展示文本，1-5 个词"},
+                                    "description": {"type": "string", "description": "选项含义 / 选了会发生什么"},
+                                },
+                                "required": ["label"],
+                            },
+                        },
+                        "multi_select": {"type": "boolean", "description": "True 多选（选项不互斥），False 单选（默认）"},
+                    },
+                    "required": ["question", "header", "options"],
+                },
+            },
+        },
+        "required": ["questions"],
+    },
+}
+```
+
+三个设计点：
+
+1. **批量提问**：一次 1–4 题、每题 2–4 个选项——把多轮追问合并成一次交互
+2. **选项带说明**：label（1-5 个词）+ description（含义 / 选了会发生什么）两层，对齐 Claude Code
+3. **两条约定写进工具描述**：UI 会自动追加「其他（自定义输入）」，options 里不要再列；有推荐选项放第一个，label 末尾加「（推荐）」
+
+### 两个配套设计
+
+**其一，提问指引**。工具描述管「怎么填」，指引管「什么时候用」：
+
+```python
+ASK_GUIDANCE = (
+    "\n\n## 提问指引\n\n"
+    "如果用户的需求有歧义、有多种合理实现可选、或你拿不准方向，"
+    "应当先用 ask_user_question 工具向用户提问澄清，不要自作主张。"
+)
+```
+
+**其二，答案回填**。用户答完，把答案拼成自然语言作为 tool_result 喂回模型，模型基于回答继续干活：
+
+```python
+CANCELLED_MSG = "用户取消了提问，未提供任何回答。请等待用户进一步指示，不要自作主张。"
+
+
+def _format_result(questions, answers) -> str:
+    pairs = "; ".join(f'"{q["question"]}" → "{a}"' for q, a in zip(questions, answers))
+    return f"用户回答如下：{pairs}。请基于这些回答继续。"
+
+
+def ask_user_question(questions) -> str:
+    """主入口：校验 → 收集答案（方向键 UI 或降级）→ 拼自然语言返回。"""
+    norm = _validate(questions)
+    if isinstance(norm, str):
+        return norm
+
+    if _is_tty():
+        try:
+            answers = _Picker(norm).run()
+        except Exception as e:
+            print(f"[ask] 方向键 UI 异常（{e}），降级为文本输入")
+            answers = _ask_plain(norm)
+    else:
+        answers = _ask_plain(norm)
+
+    if answers is None:
+        return CANCELLED_MSG
+    return _format_result(norm, answers)
+```
+
+三个值得注意的路径：
+
+1. **校验失败**（如问题数不在 1-4 个）返回错误字符串——喂回模型自己调整重试，和 demo1 的 try/except 是同一套容错协议
+2. **Esc 取消**返回「请等待用户进一步指示，不要自作主张」——把「不知道」如实还给模型
+3. **提问不是打断循环**——它就是 ReAct 循环里的一轮 tool_use，答案以 tool_result 回流，模型接着干活
+
+### 方向键 UI（真终端）
+
+```
+ ← 密码用途 ✔ 密码长度  Submit →
+ ────────────────────────────
+ 这个密码用来做什么？强度需求是什么？
+
+ ❯ 网站账号（推荐）
+       好记，含大小写字母和数字，如 Kua1Le-Mao
+   重要账户/加密
+       更随机更强，含大小写+数字+符号
+   其他（输入自定义文本）
+
+ ↑↓ 选项 · Enter 选中/确认 · ←→ 切换题目 · Esc 取消
+```
+
+- 顶部 **chip 导航**：←→ 切题，✔ 已答 / ❯ 当前，未答无标记（灰色）
+- ↑↓ 移选项、Enter 选中；**多选** Space 勾选、Enter 确认
+- 末位「其他」Enter 进入自定义文本输入；Esc 取消整个提问
+
+### 非 TTY 降级
+
+方向键 UI 依赖真终端；管道喂任务（`printf '任务\n答案\n/quit\n' | python -X utf8 agent.py` 的自测跑法）没有 TTY，自动降级为逐题打印 + 读一行，编号选择或自由文本——CI / 自动验证不炸。降级输出的样子见 §5.1 场景 A 的日志。
+
+---
+
+## 3. 机制二：plan——当前任务的规划
+
+### plan 是什么
+
+Claude Code 里对应的机制是 **Plan Mode**——切进去后只规划不动手。demo4 的 plan 就是它的教学最简版：**只保留最核心的一环——列步骤**，其余全砍，三个减法：
+
+1. **没有 5-phase 状态机**。Plan Mode 把规划拆成探索 → 设计 → 审视 → 落稿 → 提交五个阶段，每阶段有明确的目标和工具；demo4 的 plan 只做一件事——LLM 列步骤，Agent 打印清单。
+2. **不落盘**。计划就是 messages 里的 steps 数组——没有 Plan Mode 那样的 plan 文件「草稿纸」。计划就 3-5 步，规模不需要。
+3. **没有审批**。Claude Code 的 ExitPlanMode 审批弹窗、审批后把 plan 文件内容作为 tool_result 注入上下文——都不做。plan 自己的 tool_use / tool_result 已经把计划留在上下文里了。
+
+再加一条使用约定：**只调一次**——调用后立即从 tools 移除，LLM 列完就放手，后续轮次不再「管理进度」，专心干活。
+
+```
+LLM                         Agent
+  │                            │
+  ├─ plan(["A","B","C"])       │
+  │                            ├─ 打印编号清单（给人看）
+  │                            ├─ plan 从 tools 移除
+  └─ 干活（plan 已不可见）      │
+```
+
+```python
+PLAN_TOOL = {
+    "name": "plan",
+    "description": (
+        "任务规划——仅在复杂的多步任务开头调用一次，列出步骤。"
+        "**使用时机**：3 步以上、多工具协作、步骤间有依赖的任务。"
+        "简单的一两步任务直接 execute_bash / read_file，不要用 plan。"
+        "**列完步骤后**：若需求还有未定事项，先用 read_file 探索、"
+        "ask_user_question 澄清，再开始执行。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "steps": {
+                "type": "array",
+                "description": "任务步骤列表（动词开头，按执行顺序排列）",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["steps"],
+    },
+}
+```
+
+### 正向触发 + 反向抑制
+
+描述里两句话缺一不可：
+
+- **正向触发**：3 步以上、多工具协作、步骤间有依赖的任务 → 用 plan
+- **反向抑制**：简单的一两步任务直接 execute_bash / read_file → 不要用 plan
+
+**Planning 本身也是成本**——调一次 plan 就多一轮 ReAct、多一截 token。所以「什么时候用」写进工具描述让 LLM 自判：复杂才规划，简单直接干（§5.2 的案例里两侧都生效）。
+
+描述里还有第三句话——列完步骤后，引导 LLM 用 §2 的 ask_user_question 澄清未定事项、read_file 探索代码，再开始执行。**这就是 plan 和 ask 的联动**（§5.3 场景 C 有演示）。
+
+```python
+_PLAN: list = []  # 模块级计划列表——plan 工具设置，Agent 终端打印
+
+
+def plan(steps: list) -> str:
+    """
+    任务规划——仅在复杂多步任务开头调用一次。
+    LLM 列步骤，Agent 打印清单。没有状态机、没有进度追踪——教学最简形态。
+    """
+    global _PLAN
+    if not isinstance(steps, list):
+        return "[错误] steps 必须是数组"
+    _PLAN = [str(s) for s in steps]
+    print("\n" + "─" * 50)
+    for i, s in enumerate(_PLAN, 1):
+        print(f"  {i}. {s}")
+    print("─" * 50)
+    return f"已规划 {len(_PLAN)} 步"
+```
+
+两个细节：
+
+1. **入参校验**——steps 必须是数组，不合格返回错误字符串；错误以 tool_result 形式喂回模型，模型自己纠错重试
+2. **清单是打印给「人」看的**——用 ─ 分隔线在滚动终端里框出来。LLM 自己并不需要这份清单，它的规划已经体现在它发出的 tool_use 里
+
+### 调用一次后移除（agent.py）
+
+```python
+plan_just_called = False
+for block in response.content:
+    ...
+    if name == "plan":
+        plan_just_called = True
+    ...
+
+# plan 调用一次后移除——LLM 列完步骤就放手，不反复管理进度
+if plan_just_called:
+    tools = [t for t in tools if t["name"] != "plan"]
+```
+
+注意 `tools` 是每轮任务的 `list(ALL_TOOLS)` 副本——移除只影响当前任务，下一个任务恢复完整工具集。
+
+为什么移除？**防止执行阶段继续调 plan**——规划一次就放手，LLM 专心干活，不再反复管理清单。
+
+### 常驻与一次性：ask 的对照
+
+plan 调用一次后从 tools 移除，ask_user_question 常驻——规划只在任务开头，提问随时发生：任务做到一半发现新歧义，照样能问。agent.py 主循环的注释里直接写明：ask 的常驻与 plan 的一次性形成对照。
+
+### 演进方向：Claude Code 的 Plan Mode
+
+plan 的工业版是 Claude Code 的 **Plan Mode**——按 Shift+Tab 切入后只做规划不动手，四个工程手段的组合：
+
+| 手段 | 干什么 | demo4 教学版 |
+|---|---|---|
+| system-reminder 周期注入 | 约束随消息动态注入，不动 system prompt（防 cache 失效 + 注意力衰减） | 不做（约束写死在工具描述） |
+| 5-phase workflow | 探索 → 设计 → 审视 → 落稿 → 提交，每阶段明确目标 / 工具 / 产物 | 不做（正向 + 反向抑制两句提示） |
+| 唯一可写 plan 文件 | 计划落盘做「草稿纸」，迭代编辑、compact 后不丢 | 不落盘（计划在 messages 里） |
+| 工具层硬约束 + 审批 | 写工具物理移除（tools 数组里没有就调不了）+ ExitPlanMode 审批 | 只做 prompt 引导 + plan 调一次移除 |
+
+两条值得记住的原则：
+
+1. **对 LLM 行为的真正约束必须做在工具层**——prompt 是引导，tools 数组才是硬约束（demo6 约束轴的 Permission / Hook 干的就是这个）
+2. **system prompt 写不变的约定，会话中临时切换的状态约束随消息动态注入**——改 system prompt 会让整段 cache 失效，还离注意力越来越远
+
+---
+
+## 4. 机制三：Skill——历史经验的复用
+
+### 为什么需要 Skill
+
+同样的问题让 LLM 做两次，推演路径可能不一样——「代码审查」，第一次先读 diff、第二次直接读全文、第三次忘了查安全性。结果不稳定。
+
+**Skill 把「这类任务怎么做」固化成可复用的模板**：写成一个 markdown 文件，LLM 需要时经 `use_skill` 获取，按模板执行。
+
+demo4 的 Skill 是 **prompt-based**——不是代码编排，就是一段 markdown 指令。零代码、改文件即生效；代价是执行质量依赖 LLM 对指令的遵循度。这是最简形态的 Skill：单个 md 文件，YAML frontmatter 放元信息，正文即工作流。生产环境的 Skill 可能有代码级编排、多文件打包、版本管理，核心思路一致。
+
+| | Tool | Skill |
+|---|---|---|
+| **本质** | 能力接口 | 行为规范 |
+| **提供** | 执行能力 | 执行策略 |
+| **关注** | 怎么做动作 | 怎么组织动作 |
+
+### 4.1 Skill 文件格式（skills/review.md）
+
+````markdown
+---
+name: review
+description: 代码审查工作流——按规范步骤检查代码改动并给出结构化意见
+triggers: ["代码审查", "代码评审", "审查代码", "code review", "帮我 review", "review 一下"]
+---
+
+# 代码审查工作流
+
+收到「审查代码」类任务时，**必须**按以下步骤执行，不要直接下结论：
+
+## 步骤 1：收集改动
+
+- 如果有 git 仓库：用 `execute_bash` 跑 `git diff` 或 `git log --oneline -5` 看最近改动
+- 如果没有 git 或要审整个文件：用 `read_file` 直接读目标文件
+
+## 步骤 2：逐项检查
+
+读完后，对以下每一项**依次**给出判断（没问题也要说明已检查）：
+
+| 维度 | 检查点 |
+|---|---|
+| **命名** | 变量/函数/类名是否清晰、一致、贴合用途；是否有 i1/i2/a/b 这类无意义名 |
+| **错误处理** | try/except 是否吞掉异常；边界条件（空输入/超大输入/并发）是否处理 |
+| **安全** | 命令注入（shell=True 拼用户输入）/ SQL 注入 / XSS / 硬编码密钥或 token |
+| **重复代码** | 是否有 3 处以上相似代码可抽象为函数 |
+| **可读性** | 嵌套是否过深；单个函数是否过长（>100 行需警惕）；注释是否到位 |
+
+## 步骤 3：结构化输出
+
+最终回复**必须**包含以下三段（缺一不可）：
+
+```
+## ✅ 优点
+（列出做得好的地方，至少 2 条）
+
+## ⚠️ 问题
+按严重度分级：
+- 🔴 阻塞级（必须改）：...
+- 🟡 建议级（应该改）：...
+- 🟢 可选级（可以改）：...
+
+## 💡 改进建议
+（具体到代码行号或函数名的可执行建议）
+```
+
+## 注意
+
+- **不要泛泛而谈**：「代码写得不错」是无效审查；必须指向具体的行 / 函数 / 变量
+- **先看再评**：必须先 read_file 或 git diff 看到实际代码，再下结论；禁止凭文件名或描述猜测
+- **指出问题时给替代方案**：不能只说「这样不好」，要说「建议改成……」
+````
+
+### frontmatter 三字段
+
+每个 skill 文件用 YAML frontmatter 声明三件事：
+
+1. **`name`**——skill 的唯一标识（system prompt 元信息 + LLM 调用 use_skill 时引用）
+2. **`description`**——一句话说明做什么（启动时加载进「可用 Skills」元信息段，LLM 据此判断要不要用）
+3. **`triggers`**——触发词，帮 LLM 判断任务相关性；最终是否调用 `use_skill` 仍由 LLM 决策
+
+body 是**真正的工作流正文**——启动时 load_skills() 读入内存字典，LLM 调用 `use_skill` 时通过 tool_result 返回（不直接进 system prompt，避免撑爆上下文）。
+
+### 4.2 Skill 加载器：正则解析，零依赖
+
+```python
+SKILLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
+
+# 模块级 skills 字典——main() 启动时 load_skills() 赋值，use_skill 运行时读取
+_SKILLS: dict = {}
+
+# YAML frontmatter 正则——非贪婪匹配首尾 ---
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)", re.DOTALL)
+
+
+def _parse_frontmatter(text: str) -> tuple:
+    """简易 YAML frontmatter 解析（只支持 name/description/triggers 三字段）。
+    不引入 PyYAML 依赖——教学代码保持零额外依赖。"""
+    match = _FRONTMATTER_RE.match(text)
+    if not match:
+        return {}, text
+
+    fm_text, body = match.group(1), match.group(2)
+    meta = {}
+
+    # 解析 name / description（单行字符串）
+    for key in ("name", "description"):
+        m = re.search(rf"^{key}:\s*(.+?)\s*$", fm_text, re.MULTILINE)
+        if m:
+            meta[key] = m.group(1).strip().strip('"').strip("'")
+
+    # 解析 triggers（JSON 数组成 [a, b, c] 形式）
+    m = re.search(r"^triggers:\s*\[(.*?)\]", fm_text, re.MULTILINE | re.DOTALL)
+    if m:
+        meta["triggers"] = [t.strip().strip('"').strip("'").strip()
+                            for t in m.group(1).split(",") if t.strip()]
+    else:
+        meta["triggers"] = []
+
+    return meta, body.strip()
+
+
+def load_skills() -> dict:
+    """扫描 skills/*.md，解析 frontmatter，返回 {name: {description, triggers, body}}。
+    目录不存在或空时返回空字典（Agent 仍可运行，只是没有 skill 可激活）。"""
+    skills = {}
+    if not os.path.isdir(SKILLS_DIR):
+        return skills
+
+    for fname in sorted(os.listdir(SKILLS_DIR)):
+        if not fname.endswith(".md"):
+            continue
+        path = os.path.join(SKILLS_DIR, fname)
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+
+        meta, body = _parse_frontmatter(raw)
+        name = meta.get("name") or fname[:-3]  # 缺 name 用文件名
+        skills[name] = {
+            "description": meta.get("description", ""),
+            "triggers":    meta.get("triggers", []),
+            "body":        body,
+            "file":        fname,
+        }
+    return skills
+```
+
+### 不引入 PyYAML 的设计取舍
+
+`_parse_frontmatter` 用正则实现简易 YAML 解析，而不是 `import yaml`。有意的取舍：
+
+- **优点**：零额外依赖，复制 agent.py + skills/ 目录到任何机器都能跑
+- **代价**：只支持 `name: str` / `description: str` / `triggers: [str, ...]` 三个字段，不支持嵌套结构
+
+### 4.3 渐进式披露：元信息常驻，正文按需拉取
+
+```python
+def build_system_prompt_full(verbose: bool = False) -> str:
+    """
+    组装完整 system prompt（四层叠加）：
+        1. 基础（身份 + 工具 + 工作流程）        —— memory.py BASE_PROMPT
+        2. 跨会话记忆（MEMORY.md 内容 + 维护指引）—— memory.py
+        3. 可用 Skills 元信息（不含 body）        —— skill.py（渐进式披露）
+        4. 提问指引（什么时候该问用户）           —— ask.py
+    """
+    sp = build_system_prompt(verbose=verbose)
+    sp += skill.build_skill_metadata_section()
+    sp += ask.ASK_GUIDANCE
+    return sp
+```
+
+第四层提问指引就是 §2 的 ASK_GUIDANCE——四层怎么组装一目了然。
+
+这里能看清一个架构差异：**工具走 `tools` 请求参数**，每次请求单独传递；**Skills 元信息和提问指引没有这条通道，只能塞进 system prompt**——一个随请求变，一个随身份走。
+
+```python
+def build_skill_metadata_section() -> str:
+    """生成 system prompt 里的「## 可用 Skills」段——只放元信息，不放 body。
+    system prompt 告诉 LLM「有哪些技能」，LLM 自己决定要不要调 use_skill 拿正文。"""
+    if not _SKILLS:
+        return ""
+    lines = ["\n## 可用 Skills\n"]
+    for name, info in _SKILLS.items():
+        lines.append(f"- **{name}**: {info['description']}")
+        if info["triggers"]:
+            lines.append(f"  - 触发词: {', '.join(info['triggers'])}")
+    lines.append("\n当用户任务匹配某个 skill 时，先调用 `use_skill` 获取该 skill 的详细工作流，然后严格按要求执行。")
+    return "\n".join(lines) + "\n"
+
+
+USE_SKILL_TOOL = {
+    "name": "use_skill",
+    "description": (
+        "激活一个 skill 获取其详细工作流正文。"
+        "当用户任务匹配 system prompt 中列出的某个可用 skill 时，先调用此工具获取该 skill 的步骤，"
+        "然后严格按照返回的工作流执行。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "要激活的 skill 名称（见 system prompt 中的可用 Skills 列表）",
+            }
+        },
+        "required": ["name"],
+    },
+}
+
+
+def use_skill(name: str) -> str:
+    """激活 skill 获取工作流正文。"""
+    skill = _SKILLS.get(name)
+    if not skill:
+        return f"[错误] 未知 skill: {name}。可用: {', '.join(_SKILLS.keys()) or '(无)'}"
+    print(f"\n[Skill] LLM 激活 skill: {name}")
+    return skill["body"]
+```
+
+### 为什么 body 不常驻 prompt？
+
+skill 一多就会撑爆上下文（每个 body 几百到几千 token）。所以分层：system prompt 只放元信息（每个 skill 一两行），body 只在 LLM 觉得需要时才通过 `use_skill` 拉取、以 tool_result 进 messages——这就是**渐进式披露（Progressive Disclosure）**。system prompt 告诉 LLM「有哪些技能」，LLM 自己决定「要不要拿详细步骤」。
+
+这个设计 Claude Code 也在用：启动时只给每个 Skill 的名字 + 一句话简介（约 80 token），几十个 Skill 合计不到 2000 token；等模型发现当前任务和某个 Skill 相关，再把完整内容加载进来。核心原理没变（都是往上下文塞文本），但按需加载把 token 花在了刀刃上。
+
+`/skills` 命令就是这一层的可视化——启动时加载了几个 skill、各自触发词是什么，终端一眼可查。
+
+### 4.4 视角抬升：Skill、workflow 与 agent
+
+Skill 的实现之外，退一步看它在「agent 大图」里的位置。
+
+Skill 是「把这类任务怎么做固化成可复用模板」——这其实就是 **workflow（工作流）思想**：不靠 LLM 现想，人提前把步骤定好。但 demo4 的 Skill 是 **prompt-based 的「软 workflow」**：步骤写成 markdown 注入 prompt，LLM 读到后**仍在 agent loop 里自主执行**，可以偏离、跳过。如果把步骤**从 prompt 下沉到代码**——用 Python 把路径写死，不让 LLM 决定顺序——就变成了「硬 workflow」。
+
+同一任务的两种写法。任务：用户反馈分类后回复。`llm(prompt)` 是 `client.messages.create(...)` 的简写，聚焦看结构。
+
+agent 写法（mini-agent 全系列在做的）：
+
+```python
+for _ in range(MAX_ITER):
+    resp = client.messages.create(messages=messages, tools=TOOLS)
+    if resp.stop_reason != "tool_use":
+        break
+    dispatch(resp)   # 走哪条路、几步、何时停——全是 LLM 现决定的
+```
+
+workflow 写法：
+
+```python
+category = llm("分类(退款/bug/咨询)，只回类别：" + feedback)   # ① 一定先分类
+if category == "退款":                                          # ② Python 路由
+    reply = llm(REFUND_PROMPT + feedback)
+elif category == "bug":
+    reply = llm(BUG_PROMPT + feedback)
+else:
+    reply = llm(FAQ_PROMPT + feedback)
+send(reply)                                                     # ③ 一定发送
+```
+
+workflow 这段代码写死了五件事：**顺序**（分类 → 路由 → 回复）、**分叉**（`if` 是 Python 判断、不是 LLM 判断）、**用哪个 prompt**、**步数**（就 3 步）、**何时停**（代码跑完即结束）。而 agent 里这五件事全交给 LLM 在 loop 里现决定——自由换来了不可预测。
+
+### 取舍
+
+Anthropic《Building Effective Agents》的建议很干脆：**能用 workflow 解决的，就别用 agent。**
+
+- 能**画出任务流程图**（先 X 再 Y，条件 Z 走 W）→ **workflow**（可预测、便宜、好调试）
+- 步骤**依赖中间结果、没法预判**（如「修这个 bug」）→ **agent**
+
+回到 demo4：Plan 是 **agent 自己拆任务**（动态拆），Skill 是 **人提前写好的软指导**（静态拆但 LLM 自主执行），硬 workflow 是 **人提前拆死在代码里**。mini-agent 全系列教你做 agent，但 agent 是最后的手段，不是默认选项。
+
+---
+
+## 5. 真实演示案例
+
+四个场景覆盖三个机制的独立与组合：纯 ask、纯 plan、plan + ask、Skill。
+
+### 5.1 场景 A：纯 ask——密码任务的主动两问
+
+**用户输入**：
+
+> 帮我生成一个密码，如果不确定就问我
+
+LLM 判断需求有歧义（什么类型？多长？），**没有直接生成**，而是第 1 轮调 ask_user_question 一次问两题。管道模式下方向键 UI 自动降级为逐题打印：
+
+```
+第 1 轮   stop_reason = tool_use
+         ⏺ tool_call   | ask_user_question({'questions': [
+                            {'header': '密码用途', 'options': [网站账号（推荐）/ 重要账户·加密 /
+                             设备 PIN·纯数字 / 好记的口令短语]},
+                            {'header': '密码长度', 'options': [12 位（推荐）/ 16 位 / 8 位]}]})
+
+         ┌─ Agent 提问 ──────────────────────────────────────────
+         │ [1/2] 这个密码用来做什么？强度需求是什么？
+         │   1. 网站账号（推荐） —— 好记，含大小写字母和数字，如 Kua1Le-Mao
+         │   2. 重要账户/加密 —— 更随机更强，含大小写+数字+符号
+         │   3. 设备 PIN/纯数字 —— 只需数字，如 6 位 PIN
+         │   4. 好记的口令短语 —— 由多个单词组成，好记且较安全，如 Tiger-Coffee-42
+         │ 你的选择（编号或直接输入文字）: 2
+         │ [2/2] 密码长度要多少位？
+         │   1. 12 位（推荐） —— 安全性与可用性的平衡
+         │   2. 16 位 —— 更高安全性
+         │   3. 8 位 —— 更短好输入
+         │ 你的选择（编号或直接输入文字）: 1
+         └───────────────────────────────────────────────────────
+
+         ✔ tool_return | 用户回答如下："这个密码用来做什么？强度需求是什么？" → "重要账户/加密"；
+                          "密码长度要多少位？" → "12 位（推荐）"。请基于这些回答继续。
+
+第 2 轮   ⏺ tool_call   | execute_bash（node 随机生成）→ 首版没抽到特殊字符，不满足「重要账户」需求
+第 3 轮   ⏺ tool_call   | execute_bash（换成必含符号的脚本重新生成）→ h!jK8OAa7Bci
+第 4 轮   stop_reason = end_turn
+         ● assistant   | 12 位强密码：h!jK8OAa7Bci（大写+小写+数字+符号）
+```
+
+**关键观察**：
+
+1. **LLM 没有自作主张生成密码**——判断歧义（用途、长度），先问再干（提问指引生效）；选项里推荐项放第一位并标「（推荐）」、没有自列「其他」——schema 里的两条约定都遵守了
+2. **提问是 ReAct 循环里的一轮 tool_use**——不是跳出循环的弹窗，「问」和「干活」是同一套机制
+3. **答案拼成自然语言回填 tool_result**——模型基于回答继续，中间无需用户再解释
+4. **问清了，自由度仍在**——同一句话多跑几次，每次问的问题和选项都不一样（这次是用途 / 长度，下次可能是字符组成 / 数量）。ask 只是交互方式，不降低 agent 的自由度——要确定性得靠 workflow（§4.4 讲的分级）
+
+### 5.2 场景 B：plan——复杂任务列步骤后放手
+
+**用户输入**：
+
+> 我需要你做几件事：1) 先读 agent.py 找出所有工具名称和函数名；2) 然后把这些信息整理成表格；3) 最后写入 inventory.md 并验证。注意第2步依赖第1步的结果，第3步依赖第2步。
+
+**关键轨迹（共 5 轮，plan 仅第 1 轮调用）**：
+
+```
+第 1 轮   ⏺ tool_call   | plan({'steps': ['读取 agent.py，提取所有工具名称和函数名',
+                                           '将提取的信息整理成 Markdown 表格',
+                                           '写入 inventory.md 并验证文件内容']})
+         ✔ tool_return | 已规划 3 步     ← 终端打印编号清单；plan 从 tools 移除
+
+第 2 轮   ⏺ tool_call   | read_file({'path': 'agent.py'})
+
+第 3 轮   ⏺ tool_call   | write_file({'path': 'inventory.md', ...})
+
+第 4 轮   ⏺ tool_call   | read_file({'path': 'inventory.md'})    ← LLM 主动验证
+
+第 5 轮   stop_reason = end_turn → 任务完成
+```
+
+**关键观察**：
+
+- **LLM 只调一次 plan**——列出步骤，后续不再管理进度
+- **正向与反向抑制两侧都生效**——同一会话里输入「统计当前目录下 .py 文件的数量」，LLM 判断简单，**不调 plan**，直接 execute_bash 收工（中间踩了 Windows cmd 超时的坑，LLM 自己换 `ls` 解决，全程没碰 plan）
+
+### 5.3 场景 C：plan + ask——批量密码任务
+
+**用户输入**：
+
+> 帮我做一件事：1) 生成一批随机密码，每行一个写入 passwords.txt；2) 写一个校验脚本检查每行的长度和字符组成；3) 运行脚本并汇报校验结果。注意步骤间有依赖。密码数量你拿不准就问我。
+
+**关键轨迹（约 10 轮）**：
+
+```
+第 1 轮   ⏺ tool_call   | ask_user_question（1 题：需要生成多少个随机密码？
+                          选项 10 个（推荐）/ 50 个 / 100 个）
+         ✔ tool_return | 用户回答如下："需要生成多少个随机密码？" → "50 个"。请基于这些回答继续。
+
+第 2 轮   ⏺ tool_call   | plan({'steps': ['生成 50 个随机密码写入 passwords.txt',
+                                           '编写校验脚本 check_passwords.py',
+                                           '运行脚本并汇报校验结果']})
+         ✔ tool_return | 已规划 3 步     ← plan 从 tools 移除
+
+第 3–6 轮 执行三步：write_file gen_passwords.py → 运行生成 50 个 →
+         write_file check_passwords.py → 运行校验
+
+第 7 轮   ✔ 校验结果 | 50 个中 45 个通过，5 个缺某类字符（纯随机不保证四类齐）
+         ← LLM 没有汇报"大部分通过"，而是改进生成器：确保每个密码都含四类字符
+
+第 8–10 轮 重新生成 → 再校验 → 50/50 全部通过 → 汇报完成
+```
+
+**关键观察**：
+
+1. **先问后规划**——第 1 轮 ask 澄清数量，第 2 轮才 plan 拆步骤：问清楚再动手，规划建立在明确的需求上（plan 描述里的联动引导生效）
+2. **plan 调一次即移除**——第 2 轮之后 plan 不再出现
+3. **验证步骤真的抓到了问题**——校验发现 5 个密码缺字符类，LLM 没有糊弄过去，而是改进生成器重新生成、再校验，直到 50/50——这正是「计划里带验证」的价值
+4. 全程约 10 轮、用户只答了一个数字——剩下的探索、修复、自检全是 LLM 自主推进
+
+### 5.4 场景 D：Skill 触发——review 工作流自动激活
+
+**用户输入**：
+
+> 帮我 review 一下 agent.py 这个文件
+
+**关键轨迹（共 5 轮）**：
+
+```
+第 1 轮   ⏺ tool_call   | use_skill({'name': 'review'})
+                        ← LLM 看到元信息触发词「帮我 review」，主动拉取工作流正文
+第 2–4 轮 按工作流执行：git log/diff 看改动 → read_file 读 agent.py → 逐项检查
+第 5 轮   stop_reason = end_turn
+         ● assistant   | 结构化报告：✅ 优点 / ⚠️ 问题（🔴 阻塞 / 🟡 建议 / 🟢 可选）/ 💡 改进建议
+```
+
+**关键观察**：
+
+- **LLM 自己决定何时用 skill**——system prompt 元信息引导，LLM 做语义判断
+- **流程一致性**——同一个人无论问多少次 review，LLM 都按同样的模板输出
+- **Skill = 可复用的标准流程**：不依赖 LLM 每次从零推演
+
+---
+
+## 6. 总结
+
+demo4 = demo2 底座 × 规划。规划轴三件：
+
+| | ask_user_question | plan | Skill |
+|---|---|---|---|
+| **作用** | 拿不准就问 | 这次怎么做 | 这类事该怎么做 |
+| **范围** | 单次任务内任意时刻 | 单次任务，结束即丢弃 | 跨任务复用，文件持久存在 |
+| **触发** | LLM 判断有歧义，常驻可用 | LLM 按复杂度自判，调一次即移除 | LLM 看元信息自判，use_skill 拉正文 |
+
+从 Agent 能力演进的角度看：
+
+```
+ReAct       = 会行动
+  + 记忆    = 会记得过去（demo2）
+  + MCP     = 会接外部工具（demo3）
+  + 规划    = 会开口问、会拆任务、会复用经验（demo4）
+```
+
+规划轴不是让 Agent 更「聪明」，而是把人类靠谱工作的三件事教给它——**没把握先开口问（ask）、动手前先列清单（plan）、同类工作有套路（Skill）**。三样加在一起，Agent 才从「能执行」走向「能靠谱地执行」。
+
+---
+
+> 轴覆盖的权威矩阵见仓库根目录 [README](../README.md)「轴清单 × 内容矩阵」。
+
+
+

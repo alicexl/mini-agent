@@ -1,45 +1,9 @@
-# Demo3 — MCP 工具协议
+# Demo3 — 工具扩展轴：MCP 跨进程工具协议
 
-> 在 demo2（base × 记忆）基础上叠加 MCP 跨进程工具协议——**继承全部记忆能力（无自动压缩），工具边界从本进程扩展到跨进程**。
+> 把工具从「同进程函数调用」扩展为「跨进程标准化协议」（MCP）——Agent 端零新工具代码，能力长在独立的 Server 里，Server 不可用时自动降级仅本地。
+> 系列第三轴（工具）：在 demo1（ReAct）× demo2（记忆）的底座上叠加——继承 demo2 全部记忆能力（无自动压缩），工具边界从本进程扩展到跨进程 / 跨语言 / 跨机器。
 
-## 文档导航
-
-- **[`讲稿.md`](讲稿.md)** — 完整教学讲稿（6 章）
-  1. 结论：demo3 比 demo2 多了什么
-  2. MCP 协议：从函数调用到 RPC
-  3. MCP Server 实现
-  4. Agent 端：MCP Client + 工具合并
-  5. 与 demo2 的差异 + 真实案例
-  6. 总结## 关键文件
-
-| 文件 | 说明 |
-|---|---|
-| `agent.py` | 主入口：客户端 + ReAct 主循环（本地/MCP 统一分发）+ REPL |
-| `tools.py` | 工具层（demo1 四件套，本地） |
-| `mcp.py` | **MCP 客户端层**：握手 / 发现 / 调用；Server 不可用时降级仅本地 |
-| `render.py` | 渲染层（demo2 版：分色 + cache 统计） |
-| `memory.py` | 记忆层（demo2 版减自动压缩：MEMORY.md / 手动 compact / caching） |
-| `session.py` | 会话层：`memory/<会话ID>.jsonl` 持久化 + `/resume` |
-| `commands.py` | 命令层：`/help` `/status` `/tools` `/memory` `/resume` `/new` `/compact` `/quit` |
-| `mcp_server.py` | MCP Server（HTTP + JSON-RPC 2.0，暴露 add / multiply / weather 三个工具） |
-| `memory/` | 运行时生成的双层记忆目录（已 gitignore，同 demo2） |
-
-## 设计要点
-
-### 与 demo2 的差异
-
-- **新增 `mcp.py`**：MCP 客户端层——工具扩展轴的核心
-- **无自动压缩**：主循环不查阈值，压缩只由 `/compact` 手动发起（记忆能力其余全部保留）
-
-### MCP（外部工具协议）
-
-- 协议：JSON-RPC 2.0 over HTTP，统一端点 `POST /mcp`，按 `method` 字段分发
-- 本 demo 只实现 MCP 的 tools 能力，涉及三个主要 method：`initialize`（握手）→ `tools/list`（工具发现）→ `tools/call`（工具调用）
-- 工具合并：MCP server 的 schema 与本地工具都用 `input_schema`，合并就是直接 `+` 拼接
-- 路由：`_dispatch_tool` 按 tool name 二选一——本地函数直接调用，MCP 工具走 JSON-RPC POST
-- 降级模式：MCP Server 未启动时，Agent 自动降级为仅本地工具模式（4 个工具）
-
-## 运行
+## 快速开始
 
 ### 安装依赖
 
@@ -47,13 +11,15 @@
 pip install -r requirements.txt
 ```
 
-依赖：`anthropic` + `rich` + `prompt_toolkit` + `requests`。
+依赖：`anthropic` + `rich` + `prompt_toolkit` + `requests`（`requests` 为 `mcp.py` 的 JSON-RPC HTTP 调用所需）。
 
 ### 配置 API Key
 
-环境变量 `ANTHROPIC_API_KEY`（推荐，可持久化）；未设时启动交互式输入。MCP 地址在 `mcp.py` 顶部 `MCP_URL`（默认 `http://127.0.0.1:8888/mcp`）。
+网关、模型已在代码里写死，**只需配置 API Key**：环境变量 `ANTHROPIC_API_KEY`（推荐，可持久化）；未设时启动后交互式输入（不持久化，每次运行都要重输）。MCP Server 地址在 `mcp.py` 顶部 `MCP_URL`（默认 `http://127.0.0.1:8888/mcp`）。
 
 ### 启动（两个终端）
+
+**先起 MCP Server，再起 Agent**——Agent 只在启动时发现一次 MCP 工具，顺序反了会降级为仅本地模式：
 
 ```bash
 # 终端 1：起 MCP Server
@@ -63,15 +29,17 @@ python mcp_server.py
 python -X utf8 agent.py
 ```
 
-进入交互模式后输入任意任务（如「用 MCP 工具计算 35 乘以 47」——本地与 MCP 工具可在同一任务里混用，LLM 视角下无差异）。命令 `/help` 查看，`/tools` 看工具清单，`/quit` 退出。
+进入交互模式后输入任意任务（如「用 MCP 工具计算 35 乘以 47」——本地与 MCP 工具可在同一任务里混用，LLM 视角下无差异）。斜杠命令：`/help` 查看全部 / `/tools` 看工具清单（本地 / MCP 来源标注）/ `/quit` 退出。
 
-> **降级模式**：如果 MCP Server 没启动，Agent 自动降级为仅本地工具模式（4 个工具），MCP 的 add / multiply / weather 不可用。
-
-> **管道自动跑**：`printf '任务\n/quit\n' | python -X utf8 agent.py`——退出必须用 `/quit`。
+> **降级模式**：MCP Server 未启动时，Agent 自动降级为仅本地工具模式（4 个工具照常可用），add / multiply / weather 不可用。
+>
+> **管道自动跑**：`printf '任务\n/quit\n' | python -X utf8 agent.py`——退出必须用 `/quit`（MCP Server 仍需在另一终端运行）。
+>
+> **`-X utf8`**：防 GBK Windows 控制台中文乱码。
 
 ### 调试 MCP Server
 
-MCP 是开放协议，可以用 `curl` 直接验证三个 method：
+MCP 是开放协议，Server 起来后可以用 `curl` 直接验证三大 method（JSON-RPC 格式见 §2）：
 
 ```bash
 # 握手
@@ -89,3 +57,352 @@ curl -X POST http://127.0.0.1:8888/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add","arguments":{"a":2,"b":3}}}'
 ```
+
+---
+
+## 1. demo3 比 demo2 多了什么
+
+demo1/demo2 的本地工具（execute_bash / read_file / write_file / edit）都是同进程函数调用。真实 Agent 需要调用**外部工具**——数据库查询、API 调用、第三方服务。每接一个新工具就改一次 agent.py 不现实。
+
+所以 Agent 需要一个标准化的工具协议：**MCP（Model Context Protocol）**——工具跨进程、跨语言、跨机器复用。
+
+| 维度 | demo2 | demo3 |
+|---|---|---|
+| **本地工具集** | 4 个 | **不变** |
+| **ReAct 循环 / 会话模型** | ✅ | ✅ **不变**（会话持久化 / MEMORY.md / 记忆回顾 / caching 全继承） |
+| **自动压缩** | ✅ run_agent 循环前查阈值 | ❌ **去掉**——压缩只由 `/compact` 手动发起 |
+| **MCP 远程工具** | ❌ | ✅ 启动握手 + 发现 + 统一分发，Server 不可用时降级仅本地 |
+| **命令** | 8 个 | 9 个（+ `/tools` 看工具清单） |
+
+### 代码层的变化
+
+demo2 六文件 → demo3 七文件 + 一个独立 Server：**Agent 端新增一个层，Server 端新增工具持有方，微调两个文件，其余原样继承**。
+
+| 文件 | demo2 | demo3 的变化 |
+|---|---|---|
+| `mcp.py` ★新增 | — | **MCP 客户端层**：`MCPClient`（握手 / 发现 / 调用）+ `discover()`（含降级） |
+| `mcp_server.py` ★新增 | — | **MCP Server**（独立进程）：HTTP + JSON-RPC 2.0，持有 add / multiply / weather 三工具，处理三大 method |
+| `agent.py` | 主循环 | 主入口（客户端 + ReAct 主循环 + REPL）：工具集改为「本地 + MCP 合并」；`_dispatch_tool` 统一分发（本地函数 or MCP RPC）；**删掉自动压缩阈值检查** |
+| `commands.py` | 8 个命令 | + `/tools`（本地 / MCP 来源标注）——全套 `/help` `/status` `/tools` `/memory` `/resume` `/new` `/compact` `/quit` |
+| `memory.py` | 记忆层 | 删 `COMPACT_THRESHOLD_MESSAGES` 与 `force` 参数——`compact_messages` 仅手动调用；MEMORY.md / caching 其余机制原样 |
+| `tools.py` | 工具层 | demo1 四件套（本地），**原样继承** |
+| `render.py` | 渲染层 | demo2 版（分色 + cache 统计），**原样继承** |
+| `session.py` | 会话层 | `memory/<会话ID>.jsonl` 持久化 + `/resume`，**原样继承** |
+| `memory/` | — | 运行时生成的双层记忆目录（已 gitignore，同 demo2） |
+
+其中最关键的信号是——**Agent 进程零新工具代码**：add / multiply / weather 三个新工具的 schema 和实现全在 `mcp_server.py` 里，Agent 只是学会了「发现」它们。这就是工具扩展轴的本质：**能力长在 Server 端，Agent 靠协议接入**。
+
+---
+
+## 2. MCP 协议：从函数调用到 RPC
+
+demo2 的工具都是**本地函数**（`tools.py` 里的四件套），天然限制是**工具必须存在 Agent 进程内部**。外部工具当然也能接——自己写脚本、用 SDK、直连第三方的 RPC 服务，都做得通；但每个工具一套接法，全要 Agent 侧写代码维护。**如果第三方提供一个标准协议，接入就能简单得多——这就是 MCP 的价值：让 Agent 用统一的方式发现并调用外部工具。**
+
+| 维度 | 本地工具（demo2） | MCP 工具（demo3） |
+|---|---|---|
+| **载体** | Python 函数 | HTTP 服务（任何语言） |
+| **发现方式** | 看 `tools.py` 源码 | 调 `tools/list` 拿 schema 列表 |
+| **调用方式** | `fn(**args)` 函数调用 | POST JSON-RPC `tools/call` |
+| **位置** | 同进程 | 同机 / 跨机 / 跨云 |
+| **扩展** | 改代码、重启 Agent | 加一个 MCP server，Agent 自动发现 |
+
+### 传输协议：JSON-RPC 2.0
+
+本质就是 **HTTP POST + 约定格式的 JSON**。一次工具调用的往返：
+
+```json
+// 请求（Agent → Server）
+{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+ "params": {"name": "add", "arguments": {"a": 2, "b": 3}}}
+
+// 响应（Server → Agent）
+{"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "5"}]}}
+```
+
+本 demo 只实现 MCP 的 tools 能力，涉及三个 method：`initialize`（握手，协议版本协商）→ `tools/list`（工具发现，返回 schema 列表）→ `tools/call`（工具调用，content 包装结果）。
+
+demo3 的整体架构：
+
+```
+              LLM
+               |
+           tool_use
+               |
+       +-------+-------+
+       |               |
+ Local dispatcher    MCP Client（mcp.py）
+       |               |
+   Python fn         JSON-RPC
+                       |
+                  HTTP POST
+                       |
+                  MCP Server（mcp_server.py）
+                       |
+                add / multiply / weather
+```
+
+LLM 只管发 `tool_use`，由 Agent 端的 `_dispatch_tool` 决定走本地函数还是 MCP 远程调用。两条通道对 LLM 完全透明。
+
+---
+
+## 3. MCP Server 实现（mcp_server.py）
+
+Server 是工具的持有方，要回答两件事：工具怎么定义、请求怎么处理。
+
+### 工具定义：和 demo1 一模一样
+
+```python
+TOOLS = [
+    {"name": "add", "description": "计算两个数字的和",
+     "input_schema": {"type": "object",
+                      "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+                      "required": ["a", "b"]}},
+    # multiply / weather 同构
+]
+TOOL_FUNCTIONS = {"add": fn_add, "multiply": fn_multiply, "weather": fn_weather}
+```
+
+**这一层和 demo1/demo2 完全一样**——schema 描述能力、fn 实现能力、字典做路由表。MCP 没有重新定义工具能力，它定义的是发现与调用的协议。唯一的区别：这些工具不被 Agent 进程 import，而被一个独立的 HTTP 服务持有。
+
+### 请求处理：按 method 分发
+
+Server 用标准库 `http.server` 起一个 HTTP 服务，所有 JSON-RPC 走同一个端点 `POST /mcp`，按 `method` 字段分发——`initialize` 返回静态的能力声明，`tools/list` 返回 TOOLS，`tools/call` 是唯一有逻辑的一个：
+
+```python
+def _handle_tools_call(params):
+    name = params.get("name")
+    arguments = params.get("arguments", {}) or {}
+    fn = TOOL_FUNCTIONS[name]
+    value = fn(**arguments)                # ← 和本地工具的执行方式完全一样
+    # MCP 规定返回值用 content 数组包装（为多模态扩展预留）
+    return {"content": [{"type": "text", "text": str(value)}]}
+```
+
+启动 Server：
+
+```bash
+$ python mcp_server.py
+Demo3 MCP Server 已启动
+监听:   http://127.0.0.1:8888/mcp
+工具:   add, multiply, weather
+等待 Agent 调用...
+```
+
+**就这么简单**——MCP Server 的本质就是一个 HTTP 服务，按 JSON-RPC 协议处理三个 method。
+
+---
+
+## 4. Agent 端：MCP Client + 工具合并（mcp.py）
+
+Agent 端的新增集中在 `mcp.py`，装两样东西：
+
+1. **MCPClient**——把 JSON-RPC 调用封装成 Python 方法
+2. **discover()**——启动时握手 + 发现工具，Server 不可用时降级
+
+### 4.1 MCPClient：把 JSON-RPC 调用包装成方法
+
+每次手写 JSON-RPC 请求太繁琐。封装成一个 `MCPClient` 类，把「组装 payload / POST / 解析响应 / 错误处理」全部藏在 `send()` 里，再在 `send` 之上封三个对应 MCP 三大 method 的方法。
+
+```python
+class MCPClient:
+    def __init__(self, url: str):
+        self.url = url
+        self._id = 0
+
+    def send(self, method: str, params: Optional[dict] = None) -> dict:
+        """发送一次 JSON-RPC 2.0 请求并返回 result 字段"""
+        payload = {
+            "jsonrpc": "2.0",
+            "id":      self._next_id(),
+            "method":  method,
+            "params":  params or {},
+        }
+        resp = requests.post(self.url, json=payload, timeout=30)
+        data = resp.json()
+        if "error" in data:
+            raise RuntimeError(f"MCP 调用失败 ({method}): {data['error']}")
+        return data.get("result", {})
+
+    # ---- 三个上层封装 ----
+    def initialize(self) -> dict:
+        """握手：协议版本协商 + 拿 server 能力声明"""
+        return self.send("initialize", {...})
+
+    def list_tools(self) -> list:
+        return self.send("tools/list", {}).get("tools", [])
+
+    def call_tool(self, name: str, arguments: dict) -> str:
+        result = self.send("tools/call", {"name": name, "arguments": arguments})
+        return "\n".join(b["text"] for b in result["content"] if b.get("type") == "text")
+```
+
+这三层封装让 MCP 调用看起来就像普通 Python 方法——`mcp.list_tools()`、`mcp.call_tool("add", {"a":1,"b":2})`——但底层每一次都是完整的 JSON-RPC 往返。
+
+### 4.2 discover()：启动发现 + 降级保护
+
+```python
+def discover() -> tuple:
+    """启动时握手 + 发现工具。Server 未启动时降级为仅本地工具模式。"""
+    mcp_client = MCPClient(MCP_URL)
+    try:
+        info = mcp_client.initialize()
+        mcp_tools = mcp_client.list_tools()
+        return mcp_client, mcp_tools
+    except Exception as e:
+        print(f"[MCP] 连接失败，降级为仅本地工具模式。原因: {e}")
+        return mcp_client, []
+```
+
+**降级是设计要点**：远程工具箱是增强，不是依赖——Server 挂了 Agent 照样能跑（仅本地 4 工具）。
+
+### 4.3 工具合并：一行 `+` 搞定
+
+启动时一次性拉取 MCP 工具列表，与本地工具合并，得到完整工具集。**整个会话内不变**。
+
+由于本地工具 schema 与 MCP 对齐（都用 `input_schema`），合并就是**直接 `+` 拼接**——不需要任何包装函数或格式转换。
+
+```python
+MCP_CLIENT, mcp_tools = mcp.discover()
+ALL_TOOLS = TOOLS + mcp_tools          # 直接拼接，完事
+```
+
+### 为什么这么简单
+
+这就是 schema 设计对齐的好处——本地工具和 MCP 工具的结构一致（都是 `{name, description, input_schema}`），对大模型来说没有任何差异。合并不需要函数、不需要转换、不需要标记来源。**一行 `+` 就够了**。
+
+> **真实 MCP 协议规范用的是 `inputSchema`（驼峰）**。demo3 因为演示简化了设计，两端统一用 `input_schema`，省掉字段名转换。
+
+合并后的完整工具列表（7 个，`/tools` 命令可见）：
+
+| 来源 | 工具名 | 用途 |
+|---|---|---|
+| 本地 | `execute_bash` | 执行 shell 命令 |
+| 本地 | `read_file` | 读文件 |
+| 本地 | `write_file` | 写文件（整文件覆写） |
+| 本地 | `edit` | 精确替换文件中的一段文本 |
+| MCP | `add` | 加法 |
+| MCP | `multiply` | 乘法 |
+| MCP | `weather` | 天气查询 |
+
+### 4.4 统一分发：`_dispatch_tool`
+
+主循环里工具调用统一交给 `_dispatch_tool`，**它只负责本地 or MCP 二选一**。
+
+```python
+def _dispatch_tool(name: str, args: dict) -> str:
+    """统一工具分发：本地 or MCP。LLM 不需要知道工具在哪，只按名字调用。"""
+    if name in AVAILABLE_FUNCTIONS:
+        try:
+            return str(AVAILABLE_FUNCTIONS[name](**args))     # 本地：函数调用
+        except Exception as e:
+            return f"[错误] 本地工具 {name} 执行失败: {e}"
+
+    try:
+        return MCP_CLIENT.call_tool(name, args)               # 远程：JSON-RPC POST
+    except Exception as e:
+        return f"[错误] MCP 工具 {name} 调用失败: {e}"
+```
+
+### 关键观察
+
+**对大模型来说，调用本地工具和调用 MCP 工具是完全一样的体验**：都是 `tool_use` 块、都拿到 `tool_result`。路由差异全藏在 `_dispatch_tool` 里——**把「工具在哪」这个工程细节从 LLM 的视野里抹掉**。
+
+---
+
+## 5. 与 demo2 的差异 + 真实案例
+
+### 5.1 为什么去掉自动压缩
+
+demo3 继承了 demo2 的全部记忆能力（会话持久化、MEMORY.md 模型自主维护、任务结束回顾、caching），**唯独去掉了自动压缩**——主循环不再查阈值，压缩只由 `/compact` 手动发起。
+
+原因有两层：其一，真实系统的压缩按 **token 占比**触发，条数阈值本来就不是对的指标——demo2 的 12 条是演示装置，demo3 连演示意义都没有（任务都短，永远不会触发），留着反而添噪；其二，**工具轴的教学焦点是协议，不是窗口管理**——demo2 已经把压缩讲透了。`/compact` 手动路径保留——想演示压缩随时可以手动触发。
+
+### 5.2 真实案例：5 步任务的一气呵成
+
+用一个**故意混用所有工具类型**的任务把前文的机制串成一条完整轨迹——本地 bash、本地 write/edit、MCP 算术、MCP 天气（2026-10-08 实测，rich 渲染）。任务如下：
+
+```
+1) 如果有 weather.txt，先删除；
+2) 计算 35+47；
+3) 计算上一步的结果 × 9；
+4) 查询上海天气并写入 weather.txt；
+5) 修改 weather.txt 里面的上海为北京。
+```
+
+Agent 启动：
+
+```
+[MCP] 握手成功：{'name': 'demo3-mcp-server', 'version': '1.0.0'} 协议版本 2024-11-05
+[MCP] 发现 3 个远程工具：add, multiply, weather
+[Tools] 合并后共 7 个工具：execute_bash, read_file, write_file, edit, add, multiply, weather
+```
+
+启动三件事：MCP 握手成功、7 个工具合并、若 MCP 没启动则降级为仅本地工具模式（4 个工具照常可用）。
+
+真实运行日志（关键轨迹）：
+
+```
+第 1 轮
+stop_reason = tool_use
+⏺ tool_call   | execute_bash({'command': 'rm -f weather.txt'})
+⏺ tool_call   | add({'a': 35, 'b': 47})            ← 本地 + MCP 同轮并行
+✔ tool_return | [命令执行成功，无输出]
+✔ tool_return | 82
+
+第 2 轮
+⏺ tool_call   | multiply({'a': 82, 'b': 9})        ← 82 来自上一轮 add 的 tool_result
+⏺ tool_call   | weather({'city': '上海'})
+✔ tool_return | 738
+✔ tool_return | 上海 今天天气：多云，气温 22°C
+
+第 3 轮
+⏺ tool_call   | write_file({'content': '上海 今天天气：多云，气温 22°C', 'path': 'weather.txt'})
+✔ tool_return | [成功] 文件已写入: weather.txt (18 字符)
+
+第 4 轮
+⏺ tool_call   | edit({'new': '北京', 'old': '上海', 'path': 'weather.txt'})
+✔ tool_return | [成功] weather.txt 替换 第 1 处（共 1 处）
+
+第 5 轮
+⏺ tool_call   | read_file({'path': 'weather.txt'})  ← LLM 主动验证
+✔ tool_return | 北京 今天天气：多云，气温 22°C
+
+第 6 轮
+stop_reason = end_turn
+● assistant   | 5 步汇总表（全部 ✅，最终内容：北京 今天天气：多云，气温 22°C）
+[记忆] 任务结束回顾：无需更新                     ← demo2 继承的记忆机制在跑
+```
+
+### 5.3 五个关键观察
+
+| # | 观察 | 启示 |
+|---|---|---|
+| 1 | **第 1 轮并行 2 个工具**（execute_bash + add），第 2 轮又并行 2 个（multiply + weather） | LLM 判断任务之间不存在依赖，一次返回多个 tool_use，Agent runtime 依次执行 |
+| 2 | **同一响应里本地 + MCP 混调** | 路由差异全藏在 `_dispatch_tool`，LLM 视角下 7 个工具调用体验完全一致 |
+| 3 | **第 2 轮 multiply 直接复用 add 的 82** | 共享 messages 让 LLM 拿到上一轮 tool_result，跨轮状态自然传递 |
+| 4 | **第 4 轮 edit 只发 `old='上海'` + `new='北京'`** | 没 read 整文件、没 write 整文件——token 成本 O(改动大小) |
+| 5 | **第 5 轮 LLM 主动 read_file 验证 + 任务结束回顾「无需更新」** | 好的 Agent 会主动自检；记忆回顾继承自 demo2，无持久事实时不写 |
+
+这一个案例覆盖了 demo3 的全部能力：本地四件套 + MCP 三件套 + ReAct 主循环的并行 / 状态传递 / 自主验证。**用户只写一段自然语言，LLM 自己拆任务、并行、路由、收尾**。
+
+---
+
+## 6. 总结
+
+在 demo2 的记忆底座上，把工具从「同进程函数调用」扩展为「跨进程协议」——JSON-RPC + 独立 Server，Agent 启动时自动发现工具，LLM 无需知道工具在哪。
+
+从 Agent 能力演进的角度看：
+
+```
+ReAct       = 会行动
+  + 记忆    = 会记得过去（demo2）
+  + MCP     = 会接外部工具（demo3）
+```
+
+还有一种完全不同的思路：**让 LLM 直接输出可执行代码**在本地跑——一个临时脚本就能把整个任务做完，比「一轮一个 tool_call」省步数。**跑临时任务可以这样**：一次性的探索计算，写完跑完就扔，快就是一切。
+
+但**常用任务**这么干就不合适了——每次让 LLM 现写代码，结果不稳定；而且生成的代码要真执行，必须配沙箱兜底。常用任务更合适的做法是把能力沉淀下来：固化为**本地 tool**（schema 限定，可控可复用），或者把流程固化为 **Skill**（demo4 会展开）。demo3 的 tool_use，走的就是「能力走预定义 schema」这条路。
+
+demo3 的 Server 是自己模拟的；真实生态里接一个 MCP 工具，就是在配置里登记 server 名称 + URL（Claude Code 的 `.mcp.json` 就是这么做的），Agent 侧零代码改动。
+
+> 轴覆盖的权威矩阵见仓库根目录 [README](../README.md)「轴清单 × 内容矩阵」。
