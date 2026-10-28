@@ -11,7 +11,7 @@
 pip install -r requirements.txt
 ```
 
-依赖：`anthropic` + `rich` + `prompt_toolkit`。
+依赖：`anthropic` + `rich` + `prompt_toolkit` + `tiktoken`。
 
 ### 配置 API Key
 
@@ -52,7 +52,7 @@ python -X utf8 agent.py
 | 参数 | 默认 | 含义 |
 |---|---|---|
 | `MEMORY_WINDOW_LINES` | 50 | MEMORY.md 加载进 system prompt 的行数上限（自主维护应保持精炼，此为防止上下文无限增长） |
-| `COMPACT_THRESHOLD_MESSAGES` | 12 | messages 条数达此阈值触发 compact_messages |
+| `COMPACT_THRESHOLD_TOKENS` | 12000 | 历史估算 tokens 达此阈值触发 compact_messages（cl100k_base 近似——阈值只需单调近似，不追求精确） |
 | `COMPACT_KEEP_RECENT` | 4 | compact 时保留最近 N 条原始消息 |
 | `USE_CACHE_CONTROL` | True | 是否启用 prompt caching；某些兼容网关不支持时可关掉 |
 
@@ -80,14 +80,16 @@ demo2 就是要补上这三块——**会话持久化与跨会话记忆 / 短期
 
 ### 代码层的变化
 
-demo1 四文件 → demo2 六文件：**新增两个层，改了三个文件，工具层一字不动**。
+demo1 六文件 → demo2 八文件：**新增两个层，改了三个文件，工具层一字不动**。
 
 | 文件 | demo1 | demo2 的变化 |
 |---|---|---|
 | `memory.py` ★新增 | — | **记忆层**：MEMORY.md 加载 + system prompt 组装（含维护指引）、`compact_messages` 全家、cache_control 参数构建 |
 | `session.py` ★新增 | — | **会话层**：会话 jsonl 存取（增量追加 / 全量重写 / 载入）、历史会话扫描、会话 ID |
+| `stats.py` ★新增 | — | **Stats 层**：会话级 API 用量与成本累计（`/stats` 面板数据源） |
+| `logger.py` ★新增 | — | **Logger 层**：`logs/agent.log` 文件日志（排查留痕） |
 | `agent.py` | 主循环：ReAct | 主循环新增三件事——每任务开始把 MEMORY.md 拼进 system prompt（走 cache_control）；run_agent 循环前查阈值，到了先压缩再开工；任务结束增量落盘 + 记忆回顾一次（提醒不强制） |
-| `commands.py` | `/help` `/status` `/exit` `/quit` | 扩到 8 个命令（+ `/memory` `/resume` `/new` `/compact`） |
+| `commands.py` | `/help` `/status` `/exit` `/quit` | 扩到 9 个命令（+ `/memory` `/resume` `/new` `/compact` `/stats`） |
 | `render.py` | 分色输出 | + `print_cache_stats`（每轮缓存命中一行） |
 | `tools.py` | 4 个基础工具 | **不变** |
 
@@ -219,13 +221,13 @@ Claude Code 怎么解决？——`auto-compact`：接近窗口上限时，让 LL
 
 `compact_messages` 做两件事：
 
-1. **什么时候触发**：两条路——**自动**：主循环在 **`run_agent` 循环之前**检查（`handle_command` 之后），上个任务或恢复的会话攒下的消息到阈值（demo2 用 **12 条**，演示用低阈值；生产级按 token 占比 ~80% 触发）就先压缩再开工；**手动**：`/compact` 命令（`force` 跳过阈值，用户自己决定压缩时机，对应 Claude Code 的 `/compact`）
+1. **什么时候触发**：两条路——**自动**：主循环在 **`run_agent` 循环之前**检查（`handle_command` 之后），上个任务或恢复的会话攒下的消息到阈值（demo2 用 **12,000 估算 tokens**（cl100k_base 近似，演示用低阈值；生产级按上下文窗口占比 ~80% 触发））就先压缩再开工；**手动**：`/compact` 命令（`force` 跳过阈值，用户自己决定压缩时机，对应 Claude Code 的 `/compact`）
 2. **怎么压缩**：保留最近 N 条原始消息（demo2 保留 **4 条**），老消息让 LLM 按**三段结构**摘要——① 用户请求与意图（**原话逐字保留**，不转述）② 关键结果与决策（文件路径/数字/结论/修复过的坑）③ 当前进度与下一步；丢弃重复试错
 
 compact_messages 的工作原理（数字取自 §5.3 案例 3 的真实触发）：
 
 ```
-压缩前 messages（13 条——上个任务攒下，下一次 run_agent 前触发）:
+压缩前 messages（13 条——上个任务攒下，估算 tokens 过阈值，下一次 run_agent 前触发）:
 ┌─────────────────────┐
 │  [0]  user          │  ← 老 messages
 │  [1]  assistant ...  │     （9 条，
@@ -253,8 +255,12 @@ compact_messages 的工作原理（数字取自 §5.3 案例 3 的真实触发�
 ### 3.3 代码实现
 
 ```python
-COMPACT_THRESHOLD_MESSAGES = 12   # 触发阈值（演示用低值，方便短任务就触发）
-COMPACT_KEEP_RECENT        = 4    # 保留最近 N 条
+COMPACT_THRESHOLD_TOKENS = 12000  # 历史估算 tokens 触发阈值（cl100k_base 近似，演示用低值）
+COMPACT_KEEP_RECENT      = 4      # 保留最近 N 条
+
+def estimate_tokens(messages: list) -> int:
+    """估算 messages 总 tokens：每条消息 = 正文编码 + 固定开销 4（阈值只需单调近似）"""
+    ...
 
 def _is_tool_result_message(msg) -> bool:
     """判断 message 是否为「承载 tool_result 的 user 消息」"""
@@ -268,8 +274,8 @@ def _find_recent_start(messages: list) -> int:
         start -= 1
     return start
 
-def compact_messages(messages: list, client, model: str, verbose: bool = False) -> list:
-    if len(messages) < COMPACT_THRESHOLD_MESSAGES:
+def compact_messages(messages: list, client, model: str, verbose: bool = False, force: bool = False) -> list:
+    if not force and len(messages) <= COMPACT_KEEP_RECENT:
         return messages
 
     # 切点保护：不能让 recent 第一条是 tool_result（会切断 tool_use ↔ tool_result 配对）
@@ -306,7 +312,7 @@ def compact_messages(messages: list, client, model: str, verbose: bool = False) 
     return [summary_msg, ack_msg] + recent_messages
 ```
 
-主循环在 **`run_agent` 循环之前**检查（`handle_command` 之后）：`len(state.history) >= COMPACT_THRESHOLD_MESSAGES` 就压缩，**就地替换活历史**（`history[:] = ...`）。注意 `client` / `model` 由调用方传入——记忆层不持有全局 client。
+主循环在 **`run_agent` 循环之前**检查（`handle_command` 之后）：`estimate_tokens(state.history) >= COMPACT_THRESHOLD_TOKENS` 就压缩，**就地替换活历史**（`history[:] = ...`）。注意 `client` / `model` 由调用方传入——记忆层不持有全局 client。
 
 ### 三个设计要点
 
@@ -501,7 +507,7 @@ stop_reason = tool_use
 
 前几轮网关不报告缓存创建（兼容网关的典型行为），但第三轮起 `cache_read=704` 出现——**网关其实悄悄建了缓存**。这就是 §4「graceful degradation」的真实样子：第三分支的「未命中」不是失败，只是网关不报创建。
 
-compact 的自动触发时机是 **run_agent 循环前**，所以六步串行任务本身不压缩（任务内只涨不查）——它把会话攒到 13 条后，**第二个任务**（"再算一次 1+1"）的 run_agent 循环前，主循环阈值检查触发（2026-10-08 实测）：
+compact 的自动触发时机是 **run_agent 循环前**，所以六步串行任务本身不压缩（任务内只涨不查）——它把会话攒到估算 tokens 过阈值后，**第二个任务**（"再算一次 1+1"）的 run_agent 循环前，主循环阈值检查触发（2026-10-08 实测，当时为 12 条阈值版；现已改为 12,000 估算 tokens，检查时机不变）：
 
 ```
 [compact] 触发：13 条老消息 → 摘要

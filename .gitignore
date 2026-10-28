@@ -6,6 +6,7 @@ __pycache__/
 
 # 运行时产物
 **/todos.md
+**/logs/
 demo2-memory/memory/
 demo3-tools/memory/
 demo4-plan/memory/

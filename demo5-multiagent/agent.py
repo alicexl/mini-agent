@@ -11,7 +11,7 @@ Demo5 - 多 Agent 轴的 Agent
       日志落盘 + 完成通知注入，对齐 Claude Code 的后台任务）
     × 继承 demo4 的规划轴三件（plan / Skill / ask_user_question，全部自包含）
     × 继承 demo2 全部记忆能力（会话持久化 / MEMORY.md / caching）
-    × 手动压缩（/compact；同 demo3/4：无自动压缩阈值）
+    × 压缩（token 阈值自动 + /compact 手动，同 demo2）
 
 十二文件结构（demo4 九文件 + 多 Agent 层 + 后台任务层 + TUI 层）：
     agent.py     主入口：客户端 + 主循环（调 subagent.run_react_loop）+ 轮询循环
@@ -52,10 +52,12 @@ import skill
 import ask
 import jobs
 from memory import (
-    MEMORY_FILE, MEMORY_WINDOW_LINES, USE_CACHE_CONTROL,
-    build_system_prompt, build_system_param, review_memory,
+    MEMORY_FILE, MEMORY_WINDOW_LINES, COMPACT_THRESHOLD_TOKENS,
+    COMPACT_KEEP_RECENT, USE_CACHE_CONTROL, estimate_tokens,
+    build_system_prompt, build_system_param, compact_messages, review_memory,
 )
 import session
+import logger
 from render import (
     print_banner, print_divider, print_error, print_markdown, print_step,
     read_user_input,
@@ -177,7 +179,9 @@ def run_agent(user_input: str, history: list):
 # ============================================================
 
 if __name__ == "__main__":
+    logger.setup_logging()
     init_client()
+    logger.log_start(MODEL, BASE_URL)
 
     # 工具合并：本地四件套 + 规划轴三件 + subagent + job_kill（schema 格式一致，直接拼接）
     ALL_TOOLS = BASE_TOOLS + plan.PLAN_TOOLS + skill.SKILL_TOOLS + [ask.ASK_TOOL] \
@@ -215,7 +219,9 @@ if __name__ == "__main__":
             f"工具:   {len(ALL_TOOLS)} 个（四件套 + plan/use_skill/ask + subagent/job_kill）",
             f"Skills: {len(skill._SKILLS)} 个（元信息常驻，正文按需加载）",
             f"项目记忆: {MEMORY_FILE}（窗口 {MEMORY_WINDOW_LINES} 行）",
-            "压缩:   仅手动 /compact（无自动压缩）",
+            f"压缩:   阈值 {COMPACT_THRESHOLD_TOKENS:,} tokens 自动 + /compact 手动"
+            f"        （保留最近 {COMPACT_KEEP_RECENT} 条）",
+            f"日志:   {logger.LOG_FILE}",
             f"缓存:   cache_control={'on' if USE_CACHE_CONTROL else 'off'}",
             f"思考:   {'on（预算 ' + str(subagent.THINKING_BUDGET_TOKENS) + '）' if subagent.USE_THINKING else 'off'}",
         ],
@@ -276,6 +282,15 @@ if __name__ == "__main__":
 
     WAKEUP = object()   # 唤醒标记：后台 job 全部完成 → 触发通知汇报轮
 
+    def _compact_if_needed() -> None:
+        """run_agent 前查 token 阈值：历史到阈值先压缩再开工（恢复的会话也覆盖）"""
+        if estimate_tokens(state.history) >= COMPACT_THRESHOLD_TOKENS:
+            before = len(state.history)
+            state.history[:] = compact_messages(list(state.history), client, MODEL, verbose=True)
+            logger.log_compact(before, len(state.history))
+            session.rewrite_session(state.session_id, state.history)
+            print(f"[会话] compact 改写历史，已全量重写 {session.session_file(state.session_id)}")
+
     # 任务结束回顾挪后台线程（fire-and-forget）：回顾是一次同步 LLM 调用，
     # 原地跑会让交互卡顿 1-3 秒；后台跑轮次立即返回。锁保证同一时刻只有一个
     # 回顾在写 MEMORY.md（连续提问时不互相覆盖）。
@@ -294,6 +309,7 @@ if __name__ == "__main__":
         """退出：清理 job。管道模式直接 os._exit（输入线程可能仍阻塞在 prompt 上，
         Windows 解释器正常收尾会因 daemon 线程持 stdout 锁而 fatal）；
         TUI 模式通知 TUI 退出后本线程结束（主线程收尾）。"""
+        logger.log_exit()
         jobs.REGISTRY.shutdown()
         if _TTY_MODE:
             tui.request_exit()
@@ -320,6 +336,7 @@ if __name__ == "__main__":
             # 自动唤醒：不追加用户消息——通知在 run_agent 开头注入
             if user_input is WAKEUP:
                 _main_busy.set()
+                _compact_if_needed()
                 try:
                     final, new_msgs = run_agent("", state.history)
                     session.append_messages(state.session_id, new_msgs)
@@ -327,6 +344,7 @@ if __name__ == "__main__":
                     _review_async(list(state.history))   # 后台回顾：轮次立即返回
                 except Exception as e:
                     print_error(f"[错误] {e}")
+                    logger.log_error(str(e))
                 finally:
                     _main_busy.clear()
                     _drain_pending_notices()
@@ -351,6 +369,8 @@ if __name__ == "__main__":
                 continue
 
             _main_busy.set()
+            logger.log_user(user_input)
+            _compact_if_needed()
             try:
                 final, new_msgs = run_agent(user_input, state.history)
                 session.append_messages(state.session_id, new_msgs)
@@ -358,6 +378,7 @@ if __name__ == "__main__":
                 _review_async(list(state.history))   # 后台回顾：轮次立即返回
             except Exception as e:
                 print_error(f"[错误] {e}")
+                logger.log_error(str(e))
             finally:
                 _main_busy.clear()
                 _drain_pending_notices()

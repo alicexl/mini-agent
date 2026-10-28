@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Demo5 命令层 — 斜杠命令系统（/help /status /tools /skills /memory /resume /new /compact /exit）
+Demo6 命令层 — 斜杠命令系统（/help /status /stats /tools /skills /memory /resume /new /compact /exit）
 
 主循环拿到用户输入后，先看第一个字符是不是 /：斜杠命令由程序自己解释执行，
 其余输入才发给 Agent。命令用注册表挂载——加命令 = 往 COMMANDS 加一项，
@@ -14,10 +14,11 @@ from typing import Callable
 import session
 from render import console, print_step
 from memory import (
-    MEMORY_FILE, MEMORY_WINDOW_LINES,
+    MEMORY_FILE, MEMORY_WINDOW_LINES, COMPACT_THRESHOLD_TOKENS,
     COMPACT_KEEP_RECENT, USE_CACHE_CONTROL, load_memory, _extract_text,
-    compact_messages,
+    estimate_tokens, compact_messages,
 )
+from stats import STATS
 
 
 @dataclass
@@ -52,10 +53,19 @@ def _cmd_status(state: SessionState) -> bool:
         f"模型:   {state.model}",
         f"网关:   {state.base_url}",
         f"会话:   {state.session_id}",
-        f"消息:   {len(state.history)} 条（/compact 可手动压缩）",
+        f"消息:   {len(state.history)} 条（估算 {estimate_tokens(state.history):,} / "
+        f"阈值 {COMPACT_THRESHOLD_TOKENS:,} tokens，/compact 可手动压缩）",
         *state.extra_lines,
     ]
     console.print("\n" + "\n".join(f"[dim]{l}[/]" for l in lines) + "\n")
+    return True
+
+
+def _cmd_stats(state: SessionState) -> bool:
+    console.print("[dim]--- API 用量与成本（会话累计）---[/]")
+    for line in STATS.format_lines():
+        console.print(f"[dim]{line}[/]")
+    console.print()
     return True
 
 
@@ -93,7 +103,7 @@ def _cmd_compact(state: SessionState) -> bool:
 
     before = len(state.history)
     compacted = compact_messages(list(state.history), state.client, state.model,
-                                 verbose=True)
+                                 verbose=True, force=True)
     state.history[:] = compacted
     # compact 改写了历史——全量重写会话文件（与主循环的自动压缩同款处理）
     session.rewrite_session(state.session_id, state.history)
@@ -162,6 +172,7 @@ def _cmd_exit(state: SessionState) -> bool:
 COMMANDS = {
     "help":    Command("help", "显示可用命令", _cmd_help),
     "status":  Command("status", "显示会话状态", _cmd_status),
+    "stats":   Command("stats", "显示 API 用量与成本统计", _cmd_stats),
     "tools":   Command("tools", "查看工具清单", _cmd_tools),
     "skills":  Command("skills", "查看已加载 Skills", _cmd_skills),
     "memory":  Command("memory", "查看项目级记忆", _cmd_memory),

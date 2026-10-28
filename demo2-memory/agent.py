@@ -16,7 +16,9 @@ Demo2 - 带记忆的 Agent（记忆轴）
     render.py    渲染层（demo1 版 + print_cache_stats）
     memory.py    记忆层：项目级记忆 + compact + caching（记忆轴全部机制）
     session.py   会话层：memory/<会话ID>.jsonl 会话持久化 + /resume
-    commands.py  命令层：/help /status /memory /resume /new /exit
+    commands.py  命令层：/help /status /stats /memory /resume /new /exit
+    stats.py     Stats 层：会话级 API 用量与成本累计（/stats 面板数据源）
+    logger.py    Logger 层：logs/agent.log 文件日志（排查留痕）
 
 用法：
     python -X utf8 agent.py
@@ -28,11 +30,13 @@ from anthropic import Anthropic
 
 from tools import TOOLS, AVAILABLE_FUNCTIONS
 from memory import (
-    MEMORY_FILE, MEMORY_WINDOW_LINES, COMPACT_THRESHOLD_MESSAGES,
-    COMPACT_KEEP_RECENT, USE_CACHE_CONTROL,
+    MEMORY_FILE, MEMORY_WINDOW_LINES, COMPACT_THRESHOLD_TOKENS,
+    COMPACT_KEEP_RECENT, USE_CACHE_CONTROL, estimate_tokens,
     build_system_prompt, build_system_param, compact_messages, review_memory,
 )
 import session
+import stats
+import logger
 from render import (
     print_banner, print_cache_stats, print_divider, print_error,
     print_markdown, print_messages, print_stop_reason, print_step,
@@ -164,6 +168,9 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
             create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET_TOKENS}
         response = client.messages.create(**create_kwargs)
 
+        stats.STATS.record_usage(response.usage)
+        logger.log_usage(loop_idx, response.usage)
+
         if verbose:
             print_stop_reason(response.stop_reason)
             for block in response.content:
@@ -173,6 +180,7 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
                     print_step("assistant", block.text, limit=80)
                 elif block.type == "tool_use":
                     print_step("tool_call", f"{block.name}({block.input})")
+                    logger.log_tool(block.name, block.input)
             print_cache_stats(response.usage, use_cache_control=True)
 
         # 2b. 判停（最终回复也落进会话历史——恢复会话时能看到上次「答了什么」）
@@ -227,7 +235,9 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
 # ============================================================
 
 if __name__ == "__main__":
+    logger.setup_logging()
     init_client()
+    logger.log_start(MODEL, BASE_URL)
 
     state = SessionState(
         model=MODEL,
@@ -236,8 +246,10 @@ if __name__ == "__main__":
         session_id=session.new_session_id(),
         extra_lines=[
             f"项目记忆: {MEMORY_FILE}（窗口 {MEMORY_WINDOW_LINES} 行）",
-            f"压缩:   compact（阈值 {COMPACT_THRESHOLD_MESSAGES} 条 / 保留最近 {COMPACT_KEEP_RECENT} 条）",
+            f"压缩:   阈值 {COMPACT_THRESHOLD_TOKENS:,} tokens 自动 + /compact 手动"
+            f"（保留最近 {COMPACT_KEEP_RECENT} 条）",
             f"缓存:   cache_control={'on' if USE_CACHE_CONTROL else 'off'}",
+            f"日志:   {logger.LOG_FILE}",
         ],
     )
     print_banner("Demo2 Agent 已启动（记忆轴）", [
@@ -263,10 +275,15 @@ if __name__ == "__main__":
         if action == "continue":
             continue
 
-        # run_agent 循环前查阈值：上个任务/恢复的会话攒下的消息到阈值，先压缩再开工。
-        # 压缩即重写（内存怎么变，文件就怎么写）；run_agent 期间纯追加，结束批量落盘。
-        if len(state.history) >= COMPACT_THRESHOLD_MESSAGES:
+        logger.log_user(user_input)
+
+        # run_agent 循环前查 token 阈值：上个任务/恢复的会话攒下的历史到阈值，
+        # 先压缩再开工。压缩即重写（内存怎么变，文件就怎么写）；
+        # run_agent 期间纯追加，结束批量落盘。
+        if estimate_tokens(state.history) >= COMPACT_THRESHOLD_TOKENS:
+            before = len(state.history)
             state.history[:] = compact_messages(list(state.history), client, MODEL, verbose=True)
+            logger.log_compact(before, len(state.history))
             session.rewrite_session(state.session_id, state.history)
             print(f"[会话] compact 改写历史，已全量重写 {session.session_file(state.session_id)}")
 
@@ -278,3 +295,6 @@ if __name__ == "__main__":
             review_memory(state.history, client, MODEL, verbose=True)
         except Exception as e:
             print_error(f"[错误] {e}")
+            logger.log_error(str(e))
+
+    logger.log_exit()

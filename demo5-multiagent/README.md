@@ -1,7 +1,7 @@
 # Demo5 — 多 Agent 轴：Subagent 后台分包
 
 > 把相互独立的子任务各开一份 context 后台分包——**subagent**（派一次性 Subagent 在后台执行，完成通知带回最终报告）+ **jobs**（后台任务机制：shell / agent 两种 job 共用注册表、日志落盘、`<task-notification>` 通知注入）+ 兜底工具 **job_kill**（任务跑飞 / 不再需要时强停），对齐 Claude Code 的 Task 工具。
-> 本目录是系列第五站（`demo5 = demo4 底座 × 多 Agent`）：完整继承 demo4 九文件底座（规划轴三件 + 记忆 / 会话，机制一行未动），新增多 Agent / 后台任务 / TUI 三层，成十二文件结构——`agent.py`（主入口）+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `subagent.py` / `jobs.py` / `tui.py` / `render.py` / `memory.py` / `session.py` / `commands.py` + `skills/review.md`，文件分工见 [§1.1](#11-代码层的变化)。
+> 本目录是系列第五站（`demo5 = demo4 底座 × 多 Agent`）：完整继承 demo4 九文件底座（规划轴三件 + 记忆 / 会话，机制一行未动），新增多 Agent / 后台任务 / TUI 三层，成十四文件结构——`agent.py`（主入口）+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `subagent.py` / `jobs.py` / `tui.py` / `render.py` / `memory.py` / `session.py` / `commands.py` / `stats.py` / `logger.py` + `skills/review.md`，文件分工见 [§1.1](#11-代码层的变化)。
 
 ## 快速开始
 
@@ -11,7 +11,7 @@
 pip install -r requirements.txt
 ```
 
-依赖：`anthropic` + `rich` + `prompt_toolkit`。
+依赖：`anthropic` + `rich` + `prompt_toolkit` + `tiktoken`。
 
 ### 配置 API Key
 
@@ -71,7 +71,7 @@ demo5 与 demo4 的轴覆盖对照：
 | 维度 | demo4 | demo5 |
 |---|---|---|
 | **本地工具集** | 7 个 | 9 个（+ **subagent** + **job_kill**） |
-| **记忆 / 会话模型** | ✅ | ✅ **不变**（全继承；无自动压缩同 demo3/4，压缩只由 `/compact` 手动发起） |
+| **记忆 / 会话模型** | ✅ | ✅ **不变**（全继承；token 阈值自动压缩同 demo2） |
 | **规划轴三件** | ✅ | ✅ **不变**（plan / Skill / ask 全继承） |
 | **多 Agent 轴** | ❌ | ✅ subagent 后台分包 + jobs 后台任务机制（日志 + 通知） |
 
@@ -79,7 +79,7 @@ demo5 与 demo4 的轴覆盖对照：
 
 ### 1.1 代码层的变化
 
-demo4 九文件 → demo5 十二文件：**新增三个层，微调四个文件，其余原样继承**。
+demo4 十一文件 → demo5 十四文件：**新增三个层，微调四个文件，其余原样继承**。
 
 | 文件 | demo4 | demo5 的变化 |
 |---|---|---|
@@ -92,8 +92,9 @@ demo4 九文件 → demo5 十二文件：**新增三个层，微调四个文件�
 | `skill.py` | Skill 层：Skill 加载器 + use_skill | 原样继承（逐字节相同） |
 | `ask.py` | 提问层：ask_user_question 方向键 UI + 非 TTY 降级 | 加 TUI 弹层钩子 |
 | `render.py` | 渲染层（demo2 版） | 代码未动，仅补 docstring——TUI 重定向由 agent.py 在 import 前替换 sys.stdout 实现，render 的输出自动流进 TUI 日志区 |
-| `memory.py` | 记忆层（demo2 版减自动压缩） | 原样继承（逐字节相同） |
+| `memory.py` | 记忆层（token 阈值自动压缩，同 demo2） | 原样继承（逐字节相同） |
 | `session.py` | 会话层：`memory/<会话ID>.jsonl` 持久化 + `/resume` | 原样继承（逐字节相同） |
+| `stats.py` / `logger.py` | Stats / 日志层（demo1 起全系列） | 原样继承（逐字节相同） |
 | `commands.py` | 命令层：`/help` `/status` `/tools` `/skills` `/memory` `/resume` `/new` `/compact` `/quit` | `/new` 补 job 清理（其余命令不变） |
 | `skills/review.md` | 示例 Skill——代码审查工作流 | 原样继承 |
 | `jobs/` | —（运行时生成） | 后台任务日志目录（已 gitignore；启动时自动清理上次遗留，被其他实例占用的跳过） |

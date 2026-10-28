@@ -1,14 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Demo1 - 正式版（四文件结构）
+Demo1 - 正式版（六文件结构）
 
 演示 Agent 的底层原理 = LLM (大脑) + 工具 (手脚) + 循环 (ReAct)
 
     agent.py     主入口：客户端初始化 + ReAct 主循环（本文件）
     tools.py     工具层：工具 schema + 实现 + 路由表
     render.py    渲染层：rich 分色输出 + prompt_toolkit 输入
-    commands.py  命令层：/help /status /exit 斜杠命令
+    commands.py  命令层：/help /status /stats /exit 斜杠命令
+    stats.py     Stats 层：会话级 API 用量与成本累计（/stats 面板数据源）
+    logger.py    Logger 层：logs/agent.log 文件日志（排查留痕）
 
 原始单文件版保留在 agent_single.py（教学起点——「一切始于单文件」）。
 本文件由它拆分而来，功能完全一致；拆分动机：
@@ -33,6 +35,8 @@ from render import (
     read_user_input,
 )
 from commands import SessionState, handle_command
+import stats
+import logger
 
 
 # ============================================================
@@ -153,6 +157,9 @@ def run_agent(user_input: str, history: list, verbose: bool = True) -> str:
             create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET_TOKENS}
         response = client.messages.create(**create_kwargs)
 
+        stats.STATS.record_usage(response.usage)
+        logger.log_usage(loop_idx, response.usage)
+
         if verbose:
             print_stop_reason(response.stop_reason)
             for block in response.content:
@@ -162,6 +169,7 @@ def run_agent(user_input: str, history: list, verbose: bool = True) -> str:
                     print_step("assistant", block.text, limit=80)
                 elif block.type == "tool_use":
                     print_step("tool_call", f"{block.name}({block.input})")
+                    logger.log_tool(block.name, block.input)
 
         # ---- 判断是否结束 ----（最终回复也留在会话历史里，下个任务能看到）
         if response.stop_reason != "tool_use":
@@ -211,12 +219,15 @@ def run_agent(user_input: str, history: list, verbose: bool = True) -> str:
 # 命令纯斜杠：/help 查看命令、/quit 退出（裸词退出仅原始单文件版保留）。
 
 if __name__ == "__main__":
+    logger.setup_logging()
     init_client()
+    logger.log_start(MODEL, BASE_URL)
 
     state = SessionState(model=MODEL, base_url=BASE_URL)  # history 在 state 里，跨任务增长
     print_banner("Demo1 Agent 已启动", [
         f"模型:   {MODEL}",
         f"网关:   {BASE_URL}",
+        f"日志:   {logger.LOG_FILE}",
         "命令:   /help 查看命令，/quit 退出",
     ])
 
@@ -235,8 +246,13 @@ if __name__ == "__main__":
         if action == "continue":
             continue
 
+        logger.log_user(user_input)
+
         try:
             final = run_agent(user_input, state.history, verbose=True)
             print_markdown(final)
         except Exception as e:
             print_error(f"[错误] {e}")
+            logger.log_error(str(e))
+
+    logger.log_exit()

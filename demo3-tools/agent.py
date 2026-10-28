@@ -7,14 +7,14 @@ Demo3 - 工具扩展轴的 Agent
 
     × MCP 协议（mcp.py：JSON-RPC 2.0 over HTTP，跨进程工具，可跨语言跨机器）
     × 继承 demo2 全部记忆能力（会话持久化 / MEMORY.md 模型自主维护 / caching）
-    × 手动压缩（/compact；与 demo2 的差异：无自动压缩阈值）
+    × 压缩（token 阈值自动 + /compact 手动，同 demo2）
 
 七文件结构（demo2 六文件 + MCP 客户端层）：
     agent.py     主入口：客户端 + ReAct 主循环（本地/MCP 统一分发）+ REPL
     tools.py     工具层（demo1 四件套，本地）
     mcp.py       MCP 客户端层：握手 / 发现 / 调用，Server 不可用时降级仅本地
     render.py    渲染层（demo2 版：分色 + cache 统计 + user 回放）
-    memory.py    记忆层（demo2 版减自动压缩：MEMORY.md / 手动 compact / caching）
+    memory.py    记忆层（同 demo2：MEMORY.md / token 阈值 compact / caching）
     session.py   会话层：memory/<会话ID>.jsonl 持久化 + /resume
     commands.py  命令层：/help /status /tools /memory /resume /new /compact /quit
 
@@ -30,9 +30,12 @@ from anthropic import Anthropic
 from tools import TOOLS, AVAILABLE_FUNCTIONS
 import mcp
 from memory import (
-    MEMORY_FILE, MEMORY_WINDOW_LINES, USE_CACHE_CONTROL,
-    build_system_prompt, build_system_param, review_memory,
+    MEMORY_FILE, MEMORY_WINDOW_LINES, COMPACT_THRESHOLD_TOKENS,
+    COMPACT_KEEP_RECENT, USE_CACHE_CONTROL, estimate_tokens,
+    build_system_prompt, build_system_param, compact_messages, review_memory,
 )
+import stats
+import logger
 import session
 from render import (
     print_banner, print_cache_stats, print_divider, print_error,
@@ -118,7 +121,7 @@ def init_client() -> None:
 #   - 工具集从 4 个本地扩展到 4 本地 + N MCP（N 由 server 决定）
 #   - 工具调用统一分发：本地工具名走函数调用，其他走 MCP RPC——
 #     LLM 视角下本地 / MCP 无差异（schema 两端一致，直接 + 拼接合并）
-#   - 无自动压缩（demo3 刻意去掉阈值检查，压缩只由 /compact 手动发起）
+#   - 压缩：run_agent 循环前查 token 阈值，到了先 compact 再开工（同 demo2）
 
 MAX_ITERATIONS = 30  # 防止大模型陷入死循环
 
@@ -174,6 +177,9 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
             create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET_TOKENS}
         response = client.messages.create(**create_kwargs)
 
+        stats.STATS.record_usage(response.usage)
+        logger.log_usage(loop_idx, response.usage)
+
         if verbose:
             print_stop_reason(response.stop_reason)
             for block in response.content:
@@ -183,6 +189,7 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
                     print_step("assistant", block.text, limit=80)
                 elif block.type == "tool_use":
                     print_step("tool_call", f"{block.name}({block.input})")
+                    logger.log_tool(block.name, block.input)
             print_cache_stats(response.usage, use_cache_control=True)
 
         # 2b. 判停（最终回复也落进会话历史）
@@ -226,7 +233,9 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
 # ============================================================
 
 if __name__ == "__main__":
+    logger.setup_logging()
     init_client()
+    logger.log_start(MODEL, BASE_URL)
 
     # MCP 握手 + 发现工具（Server 不可用时降级为仅本地）
     MCP_CLIENT, mcp_tools = mcp.discover()
@@ -245,7 +254,9 @@ if __name__ == "__main__":
             f"MCP:    {mcp.MCP_URL}",
             f"工具:   {len(ALL_TOOLS)} 个（本地 {len(TOOLS)} + MCP {len(mcp_tools)}）",
             f"项目记忆: {MEMORY_FILE}（窗口 {MEMORY_WINDOW_LINES} 行）",
-            "压缩:   仅手动 /compact（无自动压缩）",
+            f"压缩:   阈值 {COMPACT_THRESHOLD_TOKENS:,} tokens 自动 + /compact 手动"
+            f"        （保留最近 {COMPACT_KEEP_RECENT} 条）",
+            f"日志:   {logger.LOG_FILE}",
             f"缓存:   cache_control={'on' if USE_CACHE_CONTROL else 'off'}",
         ],
     )
@@ -271,6 +282,16 @@ if __name__ == "__main__":
         if action == "continue":
             continue
 
+        logger.log_user(user_input)
+
+        # run_agent 循环前查 token 阈值：历史到阈值先压缩再开工（恢复的会话也覆盖）
+        if estimate_tokens(state.history) >= COMPACT_THRESHOLD_TOKENS:
+            before = len(state.history)
+            state.history[:] = compact_messages(list(state.history), client, MODEL, verbose=True)
+            logger.log_compact(before, len(state.history))
+            session.rewrite_session(state.session_id, state.history)
+            print(f"[会话] compact 改写历史，已全量重写 {session.session_file(state.session_id)}")
+
         try:
             final, new_msgs = run_agent(user_input, state.history, verbose=True)
             session.append_messages(state.session_id, new_msgs)
@@ -279,3 +300,6 @@ if __name__ == "__main__":
             review_memory(state.history, client, MODEL, verbose=True)
         except Exception as e:
             print_error(f"[错误] {e}")
+            logger.log_error(str(e))
+
+    logger.log_exit()

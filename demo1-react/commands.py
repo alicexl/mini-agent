@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Demo1 命令层 — 斜杠命令系统（/help /status /exit）
+Demo1 命令层 — 斜杠命令系统（/help /status /stats /exit）
 
 主循环拿到用户输入后，先看第一个字符是不是 /：斜杠命令由程序自己解释执行，
 其余输入才发给 Agent。命令用注册表挂载——加命令 = 往 COMMANDS 加一项，
@@ -13,6 +13,7 @@ from typing import Callable
 
 from render import console
 from tools import TOOLS
+from stats import STATS
 
 
 @dataclass
@@ -51,6 +52,14 @@ def _cmd_status(state: SessionState) -> bool:
     return True
 
 
+def _cmd_stats(state: SessionState) -> bool:
+    console.print("[dim]--- API 用量与成本（会话累计）---[/]")
+    for line in STATS.format_lines():
+        console.print(f"[dim]{line}[/]")
+    console.print()
+    return True
+
+
 def _cmd_exit(state: SessionState) -> bool:
     console.print("再见！")
     return False
@@ -59,6 +68,7 @@ def _cmd_exit(state: SessionState) -> bool:
 COMMANDS = {
     "help":   Command("help", "显示可用命令", _cmd_help),
     "status": Command("status", "显示会话状态", _cmd_status),
+    "stats":  Command("stats", "显示 API 用量与成本统计", _cmd_stats),
     "exit":   Command("exit", "退出程序", _cmd_exit),
     "quit":   Command("quit", "退出程序（/exit 同）", _cmd_exit),
 }

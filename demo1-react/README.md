@@ -26,11 +26,11 @@ pip install -r requirements.txt
 ### 启动
 
 ```bash
-python -X utf8 agent.py           # 正式版（四文件结构，rich 渲染）
+python -X utf8 agent.py           # 正式版（六文件结构，rich 渲染）
 python -X utf8 agent_single.py    # 原始单文件版（纯 print，零渲染依赖）
 ```
 
-进入交互模式后输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」），即可观察每一轮 ReAct 循环的决策、行动、感知。斜杠命令：`/help` 可用命令 / `/status` 会话状态 / `/quit` 退出（命令纯斜杠；`agent_single.py` 原始版仍支持裸 `quit` / `q`）。
+进入交互模式后输入任意任务（如「统计当前目录下有多少个 Python 文件，并把结果写入 count.txt」），即可观察每一轮 ReAct 循环的决策、行动、感知。斜杠命令：`/help` 可用命令 / `/status` 会话状态 / `/stats` 用量成本 / `/quit` 退出（命令纯斜杠；`agent_single.py` 原始版仍支持裸 `quit` / `q`）。
 
 > **注 1**：`verbose=True` 默认开启，打印每一轮的完整决策与工具调用，便于观察。
 >
@@ -398,18 +398,20 @@ messages 三轮增长的完整时序：
 
 ---
 
-## 4. 文件结构：从单文件到四文件
+## 4. 文件结构：从单文件到六文件
 
 `agent_single.py` 此时已是一个能干活的完整 Agent，但 3 个 Part 挤在一个文件里，demo2–6 每条新轴还要往上加代码——单文件会越长越长。更重要的不是行数，是**耦合**：想加工具要同时动 schema、实现、路由表；想调输出样式得到处翻找散落的 print。
 
-正式版**按功能拆成四个文件**——工具、渲染、命令、核心循环各归各位，与 Claude Code、Cursor 等主流 Agent 的功能分层一致：
+正式版**按功能拆成六个文件**——工具、渲染、命令、核心循环、Stats、日志各归各位，与 Claude Code、Cursor 等主流 Agent 的功能分层一致：
 
 | 文件 | 职责 |
 |---|---|
 | `agent.py` | 主入口：客户端初始化 + ReAct 主循环 |
 | `tools.py` | 工具层：schema + 4 个工具实现 + 路由表（原 Part 2 整块）——对外接口 `TOOLS` / `AVAILABLE_FUNCTIONS` |
 | `render.py` | 渲染层：rich 分色输出 + prompt_toolkit 输入（原散落各处的 print）——`print_step` / `read_user_input` 等 |
-| `commands.py` | 命令层：`/help` `/status` `/quit` 斜杠命令——`COMMANDS` / `handle_command` |
+| `commands.py` | 命令层：`/help` `/status` `/stats` `/quit` 斜杠命令——`COMMANDS` / `handle_command` |
+| `stats.py` | Stats 层：会话级 API 用量与成本累计（`/stats` 面板数据源）——`STATS` 单例 |
+| `logger.py` | Logger 层：`logs/agent.log` 文件日志（排查留痕）——`setup_logging` / `log_*` 薄封装 |
 
 `agent_single.py` 原样保留——它是教学起点（「一切始于单文件」），可与正式版对照着看：`tools.py` 就是原 Part 2（工具）整块搬家，`render.py` 收编了全部 print。拆分后各层独立演进：加工具只动 `tools.py`，换渲染方案只动 `render.py`，主循环只剩 ReAct 骨架。
 

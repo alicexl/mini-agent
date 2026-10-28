@@ -9,7 +9,7 @@ Demo4 - 规划轴的 Agent
     × Skill（skill.py：skills/*.md 可复用工作流，元信息常驻 + 正文按需加载）
     × ask_user_question（ask.py：需求有歧义时主动向用户提问，对齐 Claude Code）
     × 继承 demo2 全部记忆能力（会话持久化 / MEMORY.md / caching）
-    × 手动压缩（/compact；同 demo3：无自动压缩阈值）
+    × 压缩（token 阈值自动 + /compact 手动，同 demo2）
 
 九文件结构（demo2 六文件 + 规划层 + Skill 层 + 提问层）：
     agent.py     主入口：客户端 + ReAct 主循环（工具合并 + plan 一致性）+ REPL
@@ -18,7 +18,7 @@ Demo4 - 规划轴的 Agent
     skill.py     Skill 层：Skill 加载器 + use_skill（demo4 新增）
     ask.py       提问层：ask_user_question 方向键 UI + 非 TTY 降级（demo4 新增）
     render.py    渲染层（demo2 版：分色 + cache 统计 + user 回放）
-    memory.py    记忆层（demo2 版减自动压缩）
+    memory.py    记忆层（同 demo2：MEMORY.md / token 阈值 compact / caching）
     session.py   会话层：memory/<会话ID>.jsonl 持久化 + /resume
     commands.py  命令层：/help /status /tools /skills /memory /resume /new /compact /quit
 
@@ -35,9 +35,12 @@ import plan
 import skill
 import ask
 from memory import (
-    MEMORY_FILE, MEMORY_WINDOW_LINES, USE_CACHE_CONTROL,
-    build_system_prompt, build_system_param, review_memory,
+    MEMORY_FILE, MEMORY_WINDOW_LINES, COMPACT_THRESHOLD_TOKENS,
+    COMPACT_KEEP_RECENT, USE_CACHE_CONTROL, estimate_tokens,
+    build_system_prompt, build_system_param, compact_messages, review_memory,
 )
+import stats
+import logger
 import session
 from render import (
     print_banner, print_cache_stats, print_divider, print_error,
@@ -178,6 +181,9 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
             create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET_TOKENS}
         response = client.messages.create(**create_kwargs)
 
+        stats.STATS.record_usage(response.usage)
+        logger.log_usage(loop_idx, response.usage)
+
         if verbose:
             print_stop_reason(response.stop_reason)
             for block in response.content:
@@ -187,6 +193,7 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
                     print_step("assistant", block.text, limit=80)
                 elif block.type == "tool_use":
                     print_step("tool_call", f"{block.name}({block.input})")
+                    logger.log_tool(block.name, block.input)
             print_cache_stats(response.usage, use_cache_control=True)
 
         # 2b. 判停（最终回复也落进会话历史）
@@ -248,7 +255,9 @@ def run_agent(user_input: str, history: list, verbose: bool = True):
 # ============================================================
 
 if __name__ == "__main__":
+    logger.setup_logging()
     init_client()
+    logger.log_start(MODEL, BASE_URL)
 
     # 工具合并：本地四件套 + 规划轴三件（schema 格式一致，直接拼接）
     ALL_TOOLS = BASE_TOOLS + plan.PLAN_TOOLS + skill.SKILL_TOOLS + [ask.ASK_TOOL]
@@ -278,7 +287,9 @@ if __name__ == "__main__":
             f"工具:   {len(ALL_TOOLS)} 个（四件套 + plan/use_skill/ask_user_question）",
             f"Skills: {len(skill._SKILLS)} 个（元信息常驻，正文按需加载）",
             f"项目记忆: {MEMORY_FILE}（窗口 {MEMORY_WINDOW_LINES} 行）",
-            "压缩:   仅手动 /compact（无自动压缩）",
+            f"压缩:   阈值 {COMPACT_THRESHOLD_TOKENS:,} tokens 自动 + /compact 手动"
+            f"        （保留最近 {COMPACT_KEEP_RECENT} 条）",
+            f"日志:   {logger.LOG_FILE}",
             f"缓存:   cache_control={'on' if USE_CACHE_CONTROL else 'off'}",
         ],
     )
@@ -304,6 +315,16 @@ if __name__ == "__main__":
         if action == "continue":
             continue
 
+        logger.log_user(user_input)
+
+        # run_agent 循环前查 token 阈值：历史到阈值先压缩再开工（恢复的会话也覆盖）
+        if estimate_tokens(state.history) >= COMPACT_THRESHOLD_TOKENS:
+            before = len(state.history)
+            state.history[:] = compact_messages(list(state.history), client, MODEL, verbose=True)
+            logger.log_compact(before, len(state.history))
+            session.rewrite_session(state.session_id, state.history)
+            print(f"[会话] compact 改写历史，已全量重写 {session.session_file(state.session_id)}")
+
         try:
             final, new_msgs = run_agent(user_input, state.history, verbose=True)
             session.append_messages(state.session_id, new_msgs)
@@ -312,3 +333,6 @@ if __name__ == "__main__":
             review_memory(state.history, client, MODEL, verbose=True)
         except Exception as e:
             print_error(f"[错误] {e}")
+            logger.log_error(str(e))
+
+    logger.log_exit()

@@ -23,6 +23,8 @@ import os
 from render import print_divider, print_step, print_stop_reason, print_cache_stats
 from memory import USE_CACHE_CONTROL
 import jobs
+import stats
+import logger
 import permission
 
 
@@ -170,6 +172,9 @@ def run_react_loop(
             create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET_TOKENS}
         response = client.messages.create(**create_kwargs)
 
+        stats.STATS.record_usage(response.usage)
+        logger.log_usage(round_no, response.usage)
+
         if verbose:
             print_stop_reason(response.stop_reason)
             print_cache_stats(response.usage, use_cache_control=USE_CACHE_CONTROL)
@@ -196,6 +201,7 @@ def run_react_loop(
                     print_step("assistant", block.text, limit=200)
                 elif block.type == "tool_use":
                     print_step("tool_call", f"{block.name}({block.input})")
+                    logger.log_tool(block.name, block.input)
 
         messages.append({"role": "assistant", "content": response.content})
 

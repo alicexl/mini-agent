@@ -177,9 +177,9 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 | demo3 | `demo3-tools/agent.py`（+ `tools.py` / `mcp.py` / `render.py` / `memory.py` / `session.py` / `commands.py`）+ `mcp_server.py` | `memory/` 双层记忆目录（继承 demo2） |
 | demo4 | `demo4-plan/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（示例 Skill） |
 | demo5 | `demo5-multiagent/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `subagent.py` / `jobs.py` / `tui.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（继承 demo4） |
-| demo6 | `demo6-safety/agent.py`（+ demo5 十二文件底座 + `permission.py` 约束层） | —（约束层全在 `permission.py`） |
+| demo6 | `demo6-safety/agent.py`（+ demo5 十四文件底座 + `permission.py` 约束层） | —（约束层全在 `permission.py`） |
 
-> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）；**demo2–6 全部已迁移多文件结构**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `skill.py` Skill 层 + `ask.py` 提问层；demo5 加 `subagent.py` 多 Agent 层（后台执行 + 完成通知）+ `jobs.py` 后台任务层（shell/agent job 共用注册表、日志落盘、通知注入）+ `tui.py` 行内渲染 TUI，基于 demo4 底座（规划轴三件 + 记忆全继承、无自动压缩；demo3 的 MCP 依赖模拟 server 不带）；demo6 基于 demo5 十二文件底座，加 `permission.py` 约束层（Permission 规则引擎 + Hook + `dispatch_tool` 串进共用循环 + 审批冒泡——Subagent 的 ask 入队挂起、主循环空闲弹层，主/子一体受控））。
+> demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）+ `stats.py`（Stats 层）+ `logger.py`（日志层）；**demo2–6 全部已迁移多文件结构**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `skill.py` Skill 层 + `ask.py` 提问层；demo5 加 `subagent.py` 多 Agent 层（后台执行 + 完成通知）+ `jobs.py` 后台任务层（shell/agent job 共用注册表、日志落盘、通知注入）+ `tui.py` 行内渲染 TUI，基于 demo4 底座（规划轴三件 + 记忆全继承、token 阈值自动压缩；demo3 的 MCP 依赖模拟 server 不带）；demo6 基于 demo5 十四文件底座，加 `permission.py` 约束层（Permission 规则引擎 + Hook + `dispatch_tool` 串进共用循环 + 审批冒泡——Subagent 的 ask 入队挂起、主循环空闲弹层，主/子一体受控））。
 
 ### demo5 的定位
 
@@ -245,7 +245,7 @@ demo6: = base × 约束
 | **中断恢复**（--resume / --continue） | 记忆 | 会话状态（messages）落盘到本地，下次启动加载接着干；不是知识记忆而是执行状态（demo2 已实现教学版：`memory/<会话ID>.jsonl` + `/resume` 命令） |
 | **会话级 hook** | 约束 | 除 PreToolUse/PostToolUse 外，还有 `SessionStart` / `UserPromptSubmit` / `PreCompact` 等会话级事件，最常用于环境信息注入 |
 | **并发工具调用** | 循环 | `parallel_tool_use=true`，LLM 一次 turn 可以并行调多个独立工具（如同时 read_file 三个文件） |
-| **Token 级压缩触发** | 记忆 | compact 不按条数触发，按上下文窗口占比（如 80%）触发，更精确 |
+| **按窗口占比压缩触发** | 记忆 | compact 按上下文窗口占比（如 80%）触发——demo 系列已实现 token 估算阈值触发（cl100k 近似）；工业级用真实 usage 对窗口占比，更精确 |
 | **向量记忆** | 记忆 | Chroma / Pinecone 语义检索 top-K（通用助手路线；coding agent 主流是文件记忆） |
 | **仓库地图**（repo map） | 工具 | tree-sitter 解析全仓 → PageRank 排名选重要符号 → 压进 ~1k token 的折叠地图（Aider），让 LLM 不读全文掌握代码结构 |
 | **执行环境隔离** | 约束 | firejail / Docker / microVM（Firecracker）——Control Plane 之外的 Execution Environment 层 |

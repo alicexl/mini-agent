@@ -1,7 +1,7 @@
 # Demo3 — 工具扩展轴：MCP 跨进程工具协议
 
 > 把工具从「同进程函数调用」扩展为「跨进程标准化协议」（MCP）——Agent 端零新工具代码，能力长在独立的 Server 里，Server 不可用时自动降级仅本地。
-> 系列第三轴（工具）：在 demo1（ReAct）× demo2（记忆）的底座上叠加——继承 demo2 全部记忆能力（无自动压缩），工具边界从本进程扩展到跨进程 / 跨语言 / 跨机器。
+> 系列第三轴（工具）：在 demo1（ReAct）× demo2（记忆）的底座上叠加——继承 demo2 全部记忆能力（token 阈值自动压缩），工具边界从本进程扩展到跨进程 / 跨语言 / 跨机器。
 
 ## 快速开始
 
@@ -11,7 +11,7 @@
 pip install -r requirements.txt
 ```
 
-依赖：`anthropic` + `rich` + `prompt_toolkit` + `requests`（`requests` 为 `mcp.py` 的 JSON-RPC HTTP 调用所需）。
+依赖：`anthropic` + `rich` + `prompt_toolkit` + `requests` + `tiktoken`（`requests` 为 `mcp.py` 的 JSON-RPC HTTP 调用所需）。
 
 ### 配置 API Key
 
@@ -76,18 +76,19 @@ demo1/demo2 的本地工具（execute_bash / read_file / write_file / edit）都
 
 ### 代码层的变化
 
-demo2 六文件 → demo3 七文件 + 一个独立 Server：**Agent 端新增一个层，Server 端新增工具持有方，微调两个文件，其余原样继承**。
+demo2 八文件 → demo3 九文件 + 一个独立 Server：**Agent 端新增一个层，Server 端新增工具持有方，微调两个文件，其余原样继承**。
 
 | 文件 | demo2 | demo3 的变化 |
 |---|---|---|
 | `mcp.py` ★新增 | — | **MCP 客户端层**：`MCPClient`（握手 / 发现 / 调用）+ `discover()`（含降级） |
 | `mcp_server.py` ★新增 | — | **MCP Server**（独立进程）：HTTP + JSON-RPC 2.0，持有 add / multiply / weather 三工具，处理三大 method |
-| `agent.py` | 主循环 | 主入口（客户端 + ReAct 主循环 + REPL）：工具集改为「本地 + MCP 合并」；`_dispatch_tool` 统一分发（本地函数 or MCP RPC）；**删掉自动压缩阈值检查** |
-| `commands.py` | 8 个命令 | + `/tools`（本地 / MCP 来源标注）——全套 `/help` `/status` `/tools` `/memory` `/resume` `/new` `/compact` `/quit` |
-| `memory.py` | 记忆层 | 删 `COMPACT_THRESHOLD_MESSAGES` 与 `force` 参数——`compact_messages` 仅手动调用；MEMORY.md / caching 其余机制原样 |
+| `agent.py` | 主循环 | 主入口（客户端 + ReAct 主循环 + REPL）：工具集改为「本地 + MCP 合并」；`_dispatch_tool` 统一分发（本地函数 or MCP RPC）；run_agent 循环前查 token 阈值自动压缩（同 demo2） |
+| `commands.py` | 9 个命令 | + `/tools` + `/stats`——全套 `/help` `/status` `/stats` `/tools` `/memory` `/resume` `/new` `/compact` `/quit` |
+| `memory.py` | 记忆层 | `COMPACT_THRESHOLD_TOKENS` token 阈值自动触发（同 demo2）；MEMORY.md / caching 其余机制原样 |
 | `tools.py` | 工具层 | demo1 四件套（本地），**原样继承** |
 | `render.py` | 渲染层 | demo2 版（分色 + cache 统计），**原样继承** |
 | `session.py` | 会话层 | `memory/<会话ID>.jsonl` 持久化 + `/resume`，**原样继承** |
+| `stats.py` / `logger.py` | Stats / 日志层（demo2 起新增） | **原样继承** |
 | `memory/` | — | 运行时生成的双层记忆目录（已 gitignore，同 demo2） |
 
 其中最关键的信号是——**Agent 进程零新工具代码**：add / multiply / weather 三个新工具的 schema 和实现全在 `mcp_server.py` 里，Agent 只是学会了「发现」它们。这就是工具扩展轴的本质：**能力长在 Server 端，Agent 靠协议接入**。

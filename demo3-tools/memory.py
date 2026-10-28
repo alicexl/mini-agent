@@ -8,8 +8,8 @@ demo2 = base × 记忆。记忆轴在此独立成文件（与 demo1「工具是�
     跨会话记忆     memory/MEMORY.md，模型自主维护（对齐 Claude Code）：system prompt
                   带维护指引，模型发现值得持久的事实就用 write_file / edit 更新；
                   每次任务开始加载其内容进 system prompt
-    动态压缩       compact_messages：达到阈值时，老消息让 LLM 摘要成一段，
-                  保留最近 N 条原始消息
+    动态压缩       compact_messages：历史估算 tokens 达阈值时，老消息让 LLM 摘要成一段，
+                  保留最近 N 条原始消息（阈值检查在主循环 run_agent 前）
     Prompt caching cache_control breakpoint：长 system prompt 前缀复用，
                   首次请求创建缓存，后续命中免重传
 
@@ -24,6 +24,10 @@ memory/ 目录下的双层记忆分工（对照 Claude Code 的 MEMORY.md + proj
 
 import os
 
+import tiktoken
+
+import stats
+
 
 # ============================================================
 # 可调参数（demo2 的实验区）
@@ -33,8 +37,15 @@ import os
 MEMORY_FILE         = os.path.join("memory", "MEMORY.md")  # 项目级记忆文件（模型维护）
 MEMORY_WINDOW_LINES = 50                 # 防止上下文无限增长：最多取最后 N 行
 
-# --- 动态压缩（仅手动 /compact 触发，无自动阈值） ---
-COMPACT_KEEP_RECENT = 4  # 压缩时保留最近 N 条原始消息
+# --- 动态压缩 ---
+# 压缩触发阈值（估算 tokens）。演示用低阈值，方便短任务就触发一次压缩
+# （与旧的「12 条消息」阈值节奏接近）。生产级按 token 占比触发（见总览第八节）。
+COMPACT_THRESHOLD_TOKENS = 12000
+COMPACT_KEEP_RECENT      = 4     # 压缩时保留最近 N 条原始消息
+
+# token 估算编码：cl100k_base 是 OpenAI 系通用编码。glm-5.2 的真实分词未知，
+# 这里只用于「够不够长」的单调近似——阈值判断不追求精确。
+_ENC = tiktoken.get_encoding("cl100k_base")
 
 # --- 任务结束记忆回顾 ---
 REVIEW_TAIL_MESSAGES = 10  # 回顾时带给模型的会话末尾条数（控制成本）
@@ -136,6 +147,7 @@ def review_memory(history: list, client, model: str, verbose: bool = False) -> N
             tools=TOOLS,
             messages=messages,
         )
+        stats.STATS.record_usage(response.usage)
         if response.stop_reason != "tool_use":
             break
         messages.append({"role": "assistant", "content": response.content})
@@ -215,6 +227,21 @@ def _extract_text(content) -> str:
     return "\n".join(parts)
 
 
+def estimate_tokens(messages: list) -> int:
+    """
+    估算 messages 的总 token 数（cl100k_base 近似，用于压缩触发阈值）。
+
+    每条消息计 _extract_text 提取的正文 + 固定开销 4 token（role/分隔符的
+    近似，对齐 OpenAI 计费口径思路）。tool_result 正文被 _extract_text 截断
+    到前 200 字符，估算略偏低 → 阈值触发偏保守，可接受。
+    """
+    total = 0
+    for msg in messages:
+        total += 4
+        total += len(_ENC.encode(_extract_text(msg.get("content", ""))))
+    return total
+
+
 def _is_tool_result_message(msg) -> bool:
     """判断 message 是否为「承载 tool_result 的 user 消息」（与触发它的 assistant tool_use 配对）"""
     role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
@@ -243,14 +270,15 @@ def _find_recent_start(messages: list) -> int:
     return start
 
 
-def compact_messages(messages: list, client, model: str, verbose: bool = False) -> list:
+def compact_messages(messages: list, client, model: str, verbose: bool = False, force: bool = False) -> list:
     """
-    压缩 messages：保留最近 N 条，老的让 LLM 摘要成一段（仅 /compact 手动调用）。
+    压缩 messages：保留最近 N 条，老的让 LLM 摘要成一段。
 
     client / model 由调用方传入（memory 层不持有全局 client）。
+    force=True 跳过阈值检查——供 /compact 命令手动触发（自动触发由主循环查阈值）。
     返回新的 messages list（不修改原 list）。摘要失败时静默回退到原 messages。
     """
-    if len(messages) <= COMPACT_KEEP_RECENT:
+    if not force and len(messages) <= COMPACT_KEEP_RECENT:
         return messages
 
     # 切点保护：不能让 recent 第一条是 tool_result 消息（会切断 tool_use ↔ tool_result 配对）
@@ -288,6 +316,7 @@ def compact_messages(messages: list, client, model: str, verbose: bool = False) 
             system=compact_system_prompt,
             messages=[{"role": "user", "content": f"对话历史：\n\n{transcript}\n\n请输出压缩摘要："}],
         )
+        stats.STATS.record_usage(response.usage)
         summary = "".join(b.text for b in response.content if b.type == "text")
 
         if verbose:
@@ -308,6 +337,7 @@ def compact_messages(messages: list, client, model: str, verbose: bool = False) 
         }
 
         new_messages = [summary_msg, ack_msg] + recent_messages
+        stats.STATS.record_compaction()
         if verbose:
             print(f"[compact] 压缩后：{len(new_messages)} 条消息")
         return new_messages

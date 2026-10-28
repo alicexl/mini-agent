@@ -1,7 +1,7 @@
 # Demo4 — 规划轴：ask / plan / Skill
 
 > 在 demo2（base × 记忆）底座上叠规划轴三件——**ask（歧义时主动问）、plan（当前任务拆步骤）、Skill（历史经验复用）**，补上 ReAct「走一步看一步」的短板，让 Agent 从「能执行」走向「能靠谱地执行」。
-> 系列第 4 轴：demo1 循环 → demo2 记忆 → demo3 工具（MCP）→ **demo4 规划** → demo5 多 Agent → demo6 约束。代码为九文件结构：`agent.py` + `tools.py` / `plan.py` / `skill.py` / `ask.py` + `render.py` / `memory.py` / `session.py` / `commands.py` + `skills/review.md`（示例 Skill）。
+> 系列第 4 轴：demo1 循环 → demo2 记忆 → demo3 工具（MCP）→ **demo4 规划** → demo5 多 Agent → demo6 约束。代码为十一文件结构：`agent.py` + `tools.py` / `plan.py` / `skill.py` / `ask.py` + `render.py` / `memory.py` / `session.py` / `commands.py` / `stats.py` / `logger.py` + `skills/review.md`（示例 Skill）。
 
 ## 快速开始
 
@@ -11,7 +11,7 @@
 pip install -r requirements.txt
 ```
 
-依赖：`anthropic` + `rich` + `prompt_toolkit`。
+依赖：`anthropic` + `rich` + `prompt_toolkit` + `tiktoken`。
 
 ### 配置 API Key
 
@@ -67,13 +67,13 @@ demo4 的底座是 demo2——**记忆能力全继承**，demo3 的 MCP 不带�
 | 维度 | demo2 | demo4 |
 |---|---|---|
 | **本地工具集** | 4 个 | 7 个（四件套 + **plan / use_skill / ask_user_question**） |
-| **记忆 / 会话模型** | ✅ | ✅ **不变**（全继承；无自动压缩同 demo3） |
+| **记忆 / 会话模型** | ✅ | ✅ **不变**（全继承；token 阈值自动压缩同 demo2） |
 | **规划轴** | ❌ | ✅ 三件：ask（歧义就问）/ plan（拆当前任务）/ Skill（复用经验） |
 | **命令** | 8 个 | 9 个（+ `/skills` 查看已加载 Skill） |
 
 ### 代码层的变化
 
-demo2 六文件 → demo4 九文件：**新增三个层，微调两个文件，其余原样继承**。
+demo2 八文件 → demo4 十一文件：**新增三个层，微调两个文件，其余原样继承**。
 
 | 文件 | demo2 | demo4 的变化 |
 |---|---|---|

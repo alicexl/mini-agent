@@ -11,7 +11,7 @@
 pip install -r requirements.txt
 ```
 
-依赖：`anthropic` / `rich` / `prompt_toolkit`。
+依赖：`anthropic` / `rich` / `prompt_toolkit` / `tiktoken`。
 
 ### 配置 API Key
 
@@ -129,13 +129,14 @@ dispatch_tool 的接入点只有一处——**共用 ReAct 循环的工具执行
 | **记忆 / 会话 / 规划 / 多 Agent / TUI** | ✅ | ✅ **全继承** |
 | **约束轴** | ❌ | ✅ Permission 规则引擎 + Hook + dispatch_tool + 审批冒泡 |
 
-### 1.3 代码层的变化：十二文件 → 十三文件
+### 1.3 代码层的变化：十四文件 → 十六文件
 
-demo6 在 demo5 十二文件之上新增约束层 `permission.py`，共十三文件——**新增一个层，微调四个文件，其余原样继承（逐字节相同）**：
+demo6 在 demo5 十四文件之上新增约束层 `permission.py`，共十六文件——**新增一个层，微调四个文件，其余原样继承（逐字节相同）**：
 
 | 文件 | 职责 | demo6 的变化 |
 |---|---|---|
 | `permission.py` ★新增 | **约束层** | Permission 规则引擎 + Hook + `dispatch_tool` + 审批冒泡 |
+| `stats.py` / `logger.py` | Stats / 日志层（全系列） | **原样继承** |
 | `agent.py` | 主入口：客户端 + 主循环（调 `subagent.run_react_loop`）+ 轮询循环（通知唤醒 + 审批冒泡） | 主循环 0.5s 心跳加审批分支（空闲时弹审批层）；启动横幅加规则/Hook 信息 |
 | `subagent.py` | 多 Agent 层：subagent 工具 + 主/子共用 ReAct 循环 | 工具执行改走 `dispatch_tool`；`run_react_loop` 加 `origin` 参数（约束层判主/子） |
 | `ask.py` | 提问层（demo4 规划轴三件之一） | 抽出 `collect()` 统一收集入口——确认层与 ask_user_question 共用同一套 UI |
