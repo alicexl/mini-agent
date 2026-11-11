@@ -77,6 +77,48 @@ START → llm ──(无 tool_calls)──→ END              ← 判停出口�
                    └─(deny)──→ llm                ← 拒绝也回环（模型换路子）
 ```
 
+静态结构看完了，再画一次完整请求的**动态时序**（以 §7-3 的实测任务为例：一次要过审批的工具调用 + 一轮回环；超级步编号就是 `recursion_limit` 数的东西）：
+
+```
+用户(REPL)         图运行时（state + checkpointer）                  glm（智谱网关）
+   │                        │                                        │
+   │ stream(用户输入,        │【超级步1 · llm 节点】                   │
+   │  thread_id)            │────── 全量 messages（含 system）─────> │
+   │──────────────────────> │                                        │
+   │                        │<── AIMessage(tool_calls: execute_bash)─│
+   │                        │ · add_messages 合并进 state，落检查点   │
+   │                        │                                        │
+   │                        │【超级步2 · gate 节点】                   │
+   │                        │ · tool_calls 含 execute_bash            │
+   │                        │ · interrupt() → 整图暂停，现场落盘      │
+   │ ⚠ __interrupt__ 事件    │                                        │
+   │<────────────────────── │                                        │
+   │ 人答 y                  │                                        │
+   │ Command(resume="allow") │【重入 gate · 节点从头重跑，              │
+   │──────────────────────> │  interrupt() 调用处收到 "allow"】       │
+   │                        │                                        │
+   │                        │【超级步3 · tools 节点】                   │
+   │                        │ · ToolNode 执行，生成配对 ToolMessage    │
+   │                        │ · 合并 state，落检查点                   │
+   │                        │                                        │
+   │                        │【超级步4 · llm 节点（回环）】             │
+   │                        │──── 全量 messages（多一对调用/结果）──> │
+   │                        │<── AIMessage(纯文本，无 tool_calls) ────│
+   │                        │ · 合并 state；条件边判无 tool_calls→END │
+   │ ● 最终回复               │                                        │
+   │<────────────────────── │                                        │
+```
+
+读图时盯住三件事，对照手搓版的活就分清了：
+
+| 时序图上看到的 | 手搓版对应 | 谁干的 |
+|---|---|---|
+| 超级步 1/4 两次「全量 messages 发 glm」 | demo1 每轮 `client.messages.create(messages=messages)` | 自己（llm 节点函数） |
+| 每个超级步后「合并 state + 落检查点」 | demo1 两处 `messages.append`；demo2 jsonl 手搓落盘（会话级） | **框架**（每步自动） |
+| 超级步 2 的 interrupt 暂停与重入 | demo6 的 ask 审批冒泡（REPL `input()` 硬等） | **框架**（暂停现场也落盘，进程死了可恢复） |
+| 超级步 4 后条件边判 END | demo1 `stop_reason != "tool_use"` | 自己（`route_after_llm` 一行） |
+| 超级步编号 | demo1 `MAX_ITERATIONS`（口径差：步 ≠ 轮，一轮 ReAct ≈ 3 步） | **框架**（recursion_limit） |
+
 关键转念：**循环是图的特例**。demo1 的 while 只有一条回环路径；图把「下一步去哪」从代码位置（循环体顺序）改成显式声明（条件边），于是加节点、加分支、加暂停点都不再需要改循环结构——demo7 的审批门就是往现有图里**插了一个节点**，主流程一行没动。
 
 ---
@@ -208,6 +250,8 @@ def gate(state: AgentState) -> dict:
 | 暂停时状态在哪 | REPL 内存里挂着 | **已落盘**（checkpointer 存了暂停现场）——进程死了也能恢复接着问 |
 | 恢复值怎么传 | 函数返回值 / 队列 | `Command(resume=值)`，interrupt 调用处原地收 |
 | 适用范围 | 主循环 + 审批冒泡写死了通路 | 图里任意节点任意位置，审批 / 确认 / 补充信息都同一机制 |
+
+一个重入细节（§2 时序图超级步 2 已标）：resume 时 gate 节点**从头重跑**，不是从 `interrupt()` 那一行继续——跑到 `interrupt()` 时直接拿到恢复值。所以 interrupt 之前的节点代码必须可重入无害：本 demo 的 `needs_approval()` 是纯查询、跑几遍结果不变，天然满足；若有副作用（写文件、发请求）就要挪到 interrupt 之后或做幂等。
 
 deny 分支有个协议细节：拒绝也要给这条 AIMessage 上的**每个** tool_call 配一条拒绝 `ToolMessage`（tool_use/tool_result 严格配对是 Anthropic API 的硬要求），模型看到拒绝会自己换路子（§7 实测：两次 shell 被拒后改用 write_file 完成任务）。
 
