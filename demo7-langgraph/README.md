@@ -35,11 +35,9 @@ python -X utf8 agent.py
 
 进入交互模式后输入任意任务。命令：`/help` 可用命令 / `/status` 会话状态 / `/resume` 接续历史会话 / `/quit` 退出。
 
-> **注 1**：`-X utf8` 防止 GBK Windows 控制台中文乱码；管道（非终端）下输入自动降级 `input()`、输出自动去色，`printf '任务\n/quit\n' | python -X utf8 agent.py` 可自动跑完。
+> **注 1**：`-X utf8` 防止 GBK Windows 控制台中文乱码。
 >
-> **注 2**：管道运行时审批门**自动拒绝**（deny）——安全优先，恰好完整演示 deny 分支。
->
-> **注 3**：与 demo1-6 相同的坑：若环境里残留 Claude Code harness 注入的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL`，会与 `.env` 的 Key 形成**双 auth header** 冲突（401）。demo 外环境运行须 `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u ANTHROPIC_API_KEY` 前缀清掉，详见仓库 CLAUDE.md。
+> **注 2**：与 demo1-6 相同的坑：若环境里残留 Claude Code harness 注入的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL`，会与 `.env` 的 Key 形成**双 auth header** 冲突（401）。demo 外环境运行须 `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u ANTHROPIC_API_KEY` 前缀清掉，详见仓库 CLAUDE.md。
 
 ---
 
@@ -235,23 +233,22 @@ deny 分支有个协议细节：拒绝也要给这条 AIMessage 上的**每个**
 
 图上的走线：`llm → gate(直通) → tools → llm → gate → tools → llm → gate → tools → llm → END`——条件边两次回环、第三次判停，与 demo1 的 3 轮 ReAct 完全同构。
 
-### 7-2 约束轴 deny：两次被拒，模型自己换路子（管道运行，审批自动拒绝）
+### 7-2 约束轴 deny：两次被拒，模型自己换路子
 
-任务：「用 shell 命令 echo hello-deny-demo 的输出写进 deny_test.txt」
+任务：「用 shell 命令 echo hello-deny-demo 的输出写进 deny_test.txt」（此处用驱动脚本自动答 n，渲染同款；真终端在 ⚠ 行后人工输 y/n）
 
 ```
-⏺ tool_call   | execute_bash({'command': 'echo hello-deny-demo > deny_test.txt && cat deny_test.txt'})
-⚠ approval    | execute_bash({'command': 'echo hello-deny-demo > deny_test.txt && cat deny_test.txt'})
-[非交互模式] 审批默认拒绝（deny）
-✔ tool_return | [用户拒绝] 该工具调用未获审批，请换一种不涉险的方式完成任务
-⏺ tool_call   | execute_bash({'command': 'echo hello-deny-demo | tee deny_test.txt'})   ← 换个姿势再试
-⚠ approval    | execute_bash({'command': 'echo hello-deny-demo | tee deny_test.txt'})
+⏺ tool_call   | execute_bash({'command': 'echo hello-deny-demo > deny_test.txt'})
+⚠ approval    | execute_bash({'command': 'echo hello-deny-demo > deny_test.txt'})
 ✔ tool_return | [用户拒绝] 该工具调用未获审批，请换一种不涉险的方式完成任务
 ⏺ tool_call   | write_file({'content': 'hello-deny-demo\n', 'path': 'deny_test.txt'})   ← 弃 shell 改走文件工具
 ✔ tool_return | [成功] 文件已写入: deny_test.txt (16 字符)
-⏺ tool_call   | read_file({'path': 'deny_test.txt'})
+⏺ tool_call   | execute_bash({'command': 'cat deny_test.txt'})                          ← 验证时又想用 shell
+⚠ approval    | execute_bash({'command': 'cat deny_test.txt'})
+✔ tool_return | [用户拒绝] 该工具调用未获审批，请换一种不涉险的方式完成任务
+⏺ tool_call   | read_file({'path': 'deny_test.txt'})                                    ← 换 read_file 验证
 ✔ tool_return | hello-deny-demo
-● assistant   | 完成。由于 shell 命令被审批拒绝，我改用文件写入工具直接创建了 ...
+● assistant   | 已完成。由于 shell 命令被拒绝，我改用 write_file 直接写入，内容 `hello-deny-demo` 已成功写入 deny_test.txt ...
 ```
 
 两次 `gate(deny) → llm` 回环后模型放弃 shell——拒绝信息作为 ToolMessage 回给模型、模型基于它改策略，这条链路和 demo6 手搓版语义一致。
