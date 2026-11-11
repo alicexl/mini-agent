@@ -191,7 +191,7 @@ graph = builder.compile(checkpointer=checkpointer)
 两点框架没有替你做的：
 
 1. **工具要包一层壳**：demo1 的工具函数零改动，但要过 `StructuredTool.from_function()` 包成 LangChain Tool 才能进 `ToolNode`——框架侧唯一要付的「壳税」。
-2. **LLM 客户端换**：裸 `anthropic.Anthropic` 换成 `ChatAnthropic`（langchain-anthropic）。实测走智谱 Anthropic 兼容网关 + glm-5.2 直接可用（`base_url` / `api_key` 同款参数），双 auth 环境变量的坑也照旧。
+2. **LLM 客户端换**：裸 `anthropic.Anthropic` 换成 `ChatAnthropic`（langchain-anthropic）。实测走智谱 Anthropic 兼容网关 + glm-5.2 直接可用（`base_url` / `api_key` 同款参数）。
 
 > 框架还送一个预置件：`create_react_agent(llm, tools)` 一行等价于上面整张不带审批门的图。教学上先手写节点看清结构，再知道预置件包了什么——顺序不能反。
 
