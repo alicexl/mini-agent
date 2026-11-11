@@ -1,6 +1,6 @@
 # mini-agent — 从 0 到 1 拆解 Agent 的底层原理
 
-> 用 7 个递进的最简 demo（从 demo1 的 4 文件约 600 行，到 demo6 的 13 文件约 3000 行）把 Claude Code / Cursor / Devin 这类"自动干活"工具的底层机制完全拆开——6 条能力轴 + 1 个框架对照篇（demo7，把 base 交给 LangGraph 重写一遍）。
+> 用 7 个递进的最简 demo（从 demo1 的 4 文件约 600 行，到 demo6 的 13 文件约 3000 行）把 Claude Code / Cursor / Devin 这类"自动干活"工具的底层机制完全拆开——6 条能力轴 + 1 个框架对照篇（demo7，把终态 demo6 交给 LangGraph 重写）。
 >
 > 每个目录下一份多文件实现（入口 `agent.py`，直接 `python agent.py` 跑通）+ 一份 `README.md`（快速开始 + 完整教学文档：设计解析 + 真实运行日志）。本文件是**顶层索引**——一张图看完 6 个 demo 的能力轴与解决的核心问题。
 
@@ -37,7 +37,7 @@
 | **[demo4-plan](demo4-plan)** | 规划 | `base × 规划` | 给它**纸笔 + 套路手册** | 走一步看一步容易跑偏；常见任务每次重新想 |
 | **[demo5-multiagent](demo5-multiagent)** | 多 Agent | `base × 多 Agent` | 给它**一次性助手** | 单 Agent 上下文膨胀；独立子任务无法外包隔离 |
 | **[demo6-safety](demo6-safety)** | 约束 | `base × 约束` | 给它**手脚的安全防护** | 工具太自由（`rm -rf /`、`dd of=/dev/sda`），且安全逻辑硬编码不可配置 |
-| **[demo7-langgraph](demo7-langgraph)** | 框架（对照篇） | `base × 框架` | 把 base **交给框架**再写一遍 | 手搓六轴之后：LangGraph 帮你做了什么、藏了什么、没接管什么 |
+| **[demo7-langgraph](demo7-langgraph)** | 框架（对照篇） | `base × 框架` | 把 demo6 **交给框架**再写一遍 | 手搓到 demo6 终态之后：LangGraph 帮你做了什么、藏了什么、没接管什么 |
 
 ---
 

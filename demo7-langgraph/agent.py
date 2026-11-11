@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Demo7 — 框架对照篇：demo1 的 ReAct 循环交给 LangGraph 重写
+Demo7 — 框架对照篇：把 demo6（系列终态手搓 Runtime）交给 LangGraph 重写
 
 demo(N) = base × 轴N；demo7 = base × 框架（不新增能力，换一种表达）。
-同一个 base（四件套工具 + ReAct 心跳），三轴在图上自然叠加：
+代码实现三条核心轴的对照（循环 / 约束 / 记忆——LangGraph 的三个招牌能力），
+其余部件（MCP / plan / Skill / Subagent / 完整规则表 / Hook）重写麻烦、
+教学增量低，见 README §3 映射总表的对应物说明。
 
     循环轴   手搓 while 循环        → StateGraph（llm 节点 + tools 节点 + 条件边回环）
     约束轴   demo6 的 permission ask → gate 节点 + interrupt() 审批门

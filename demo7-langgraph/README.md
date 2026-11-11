@@ -1,8 +1,8 @@
-# Demo7 — 框架对照篇：把 demo1 交给 LangGraph
+# Demo7 — 框架对照篇：把 demo6 交给 LangGraph
 
-> demo(N) = base × 轴N；demo7 = base × **框架**。它不新增能力——同一个 base（demo1 的四件套工具 + ReAct 心跳），换 [LangGraph](https://langchain-ai.github.io/langgraph/) 重新表达一遍，看清框架**帮你做了什么、藏了什么、没接管什么**。
+> demo(N) = base × 轴N；demo7 = base × **框架**。它不新增能力——把系列跑到的终态 [demo6](../demo6-safety/README.md)（demo5 十四文件底座 + 约束层的完整手搓 Runtime）交给 [LangGraph](https://langchain-ai.github.io/langgraph/) 重新表达，看清框架**帮你做了什么、藏了什么、没接管什么**。
 >
-> 代码实现三条轴的对照（循环 / 约束 / 记忆），其余三条（工具 / 规划 / 多 Agent）给概念映射。前置：先学 [demo1](../demo1-react/README.md)（base）。
+> 代码实现三条核心轴的对照（循环 / 约束 / 记忆——恰好是 LangGraph 的三个招牌能力）；其余部件（MCP / plan / Skill / Subagent / 完整规则表 / Hook）重写麻烦、教学增量低，[§3 映射总表](#3-六轴映射总表)说明对应物即可。前置：[demo1](../demo1-react/README.md)（base）必学，建议六轴都过一遍再来——每个映射才有落点。
 
 ---
 
@@ -43,7 +43,9 @@ python -X utf8 agent.py
 
 ## 1. 为什么有对照篇
 
-demo1–6 手搓了一个完整的 Agent Runtime：循环、记忆、工具、规划、多 Agent、约束，六条轴全是自己写的 `while` / `open()` / `if`。工业界走 Agent 路线的另一条路是**用框架**——LangChain 生态的 LangGraph 是当下最主流的一个。
+demo1–6 手搓了一个完整的 Agent Runtime：循环、记忆、工具、规划、多 Agent、约束，六条轴全是自己写的 `while` / `open()` / `if`——demo6 就是这个终态。工业界走 Agent 路线的另一条路是**用框架**——LangChain 生态的 LangGraph 是当下最主流的一个。
+
+demo7 的对照对象就是这个终态：把 demo6 交给 LangGraph 重写。其中三条核心轴（循环 / 约束 / 记忆）给出代码级对照；其余部件（MCP / plan / Skill / Subagent / 完整规则表 / Hook）重写麻烦、教学增量低，说明对应物即可（§3）。
 
 对照篇回答三个问题：
 
@@ -92,7 +94,7 @@ START → llm ──(无 tool_calls)──→ END              ← 判停出口�
 | 规划 | demo4 | plan 一次性工具 + Skill 渐进披露 | Plan-and-Execute 是官方示例**模式**（planner / executor 两节点），无预置件；Skill 机制框架无对应 | 概念映射 |
 | 多 Agent | demo5 | subagent 后台执行 + jobs 注册表 | `Send` API（动态派发）/ 子图 / `langgraph-supervisor` 库 | 概念映射 |
 
-> demo2 的另外两件——compact 压缩、prompt caching——**框架不接管**（见 §5 诚实边界）。
+> 框架不接管的清单还有：demo2 的 compact 压缩、prompt caching、`MEMORY.md` 长期记忆（§5），demo6 的完整 Permission 规则表与 Hook 回调（§6）——都留在手搓侧。
 
 ---
 
