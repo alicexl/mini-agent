@@ -35,9 +35,7 @@ python -X utf8 agent.py
 
 进入交互模式后输入任意任务。命令：`/help` 可用命令 / `/status` 会话状态 / `/resume` 接续历史会话 / `/quit` 退出。
 
-> **注 1**：`-X utf8` 防止 GBK Windows 控制台中文乱码。
->
-> **注 2**：与 demo1-6 相同的坑：若环境里残留 Claude Code harness 注入的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL`，会与 `.env` 的 Key 形成**双 auth header** 冲突（401）。demo 外环境运行须 `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u ANTHROPIC_API_KEY` 前缀清掉，详见仓库 CLAUDE.md。
+> **注 1**：与 demo1-6 相同的坑：若环境里残留 Claude Code harness 注入的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL`，会与 `.env` 的 Key 形成**双 auth header** 冲突（401）。demo 外环境运行须 `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u ANTHROPIC_API_KEY` 前缀清掉，详见仓库 CLAUDE.md。
 
 ---
 
