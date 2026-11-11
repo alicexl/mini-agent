@@ -1,0 +1,5 @@
+langgraph>=1.2
+langchain-anthropic>=1.7
+langgraph-checkpoint-sqlite>=3.1
+rich>=13
+prompt_toolkit>=3

@@ -1,6 +1,6 @@
 # mini-agent — 从 0 到 1 拆解 Agent 的底层原理
 
-> 用 6 个递进的最简 demo（从 demo1 的 4 文件约 600 行，到 demo6 的 13 文件约 3000 行）把 Claude Code / Cursor / Devin 这类"自动干活"工具的底层机制完全拆开。
+> 用 7 个递进的最简 demo（从 demo1 的 4 文件约 600 行，到 demo6 的 13 文件约 3000 行）把 Claude Code / Cursor / Devin 这类"自动干活"工具的底层机制完全拆开——6 条能力轴 + 1 个框架对照篇（demo7，把 base 交给 LangGraph 重写一遍）。
 >
 > 每个目录下一份多文件实现（入口 `agent.py`，直接 `python agent.py` 跑通）+ 一份 `README.md`（快速开始 + 完整教学文档：设计解析 + 真实运行日志）。本文件是**顶层索引**——一张图看完 6 个 demo 的能力轴与解决的核心问题。
 
@@ -37,6 +37,7 @@
 | **[demo4-plan](demo4-plan)** | 规划 | `base × 规划` | 给它**纸笔 + 套路手册** | 走一步看一步容易跑偏；常见任务每次重新想 |
 | **[demo5-multiagent](demo5-multiagent)** | 多 Agent | `base × 多 Agent` | 给它**一次性助手** | 单 Agent 上下文膨胀；独立子任务无法外包隔离 |
 | **[demo6-safety](demo6-safety)** | 约束 | `base × 约束` | 给它**手脚的安全防护** | 工具太自由（`rm -rf /`、`dd of=/dev/sda`），且安全逻辑硬编码不可配置 |
+| **[demo7-langgraph](demo7-langgraph)** | 框架（对照篇） | `base × 框架` | 把 base **交给框架**再写一遍 | 手搓六轴之后：LangGraph 帮你做了什么、藏了什么、没接管什么 |
 
 ---
 
@@ -86,6 +87,7 @@ python agent.py
 | **Subagent**（后台一次性） | demo5 | 独立 context、后台执行、完成通知带回报告；适合**相互独立**的子任务 |
 | **Permission** | demo6 | `(工具, fnmatch 模式, action)` 三元组规则表，first-match——allow / deny / ask，工具调用前的访问控制 |
 | **Hook** | demo6 | PreToolUse / PostToolUse 事件回调（permission.py 内函数：Pre 可拦/改 input，Post 可改/补 output） |
+| **框架对照**（循环/约束/记忆三条轴代码实现） | demo7 | while 循环 → StateGraph 条件边回环；ask 冒泡 → `interrupt()` + `Command(resume=)`；jsonl 手搓落盘 → Checkpointer 每步快照。compact/caching 框架不接管 |
 
 ---
 
@@ -100,6 +102,7 @@ demo3  = base × 工具扩展        （MCP 外部工具协议）
 demo4  = base × 规划            （手动 Plan + 自动 Plan + Skill 预消化）
 demo5  = base × 多 Agent        （Subagent 独立 context 分包）
 demo6  = base × 约束            （Permission 规则 + Hook 回调）
+demo7  = base × 框架            （对照篇——六轴的 LangGraph 视角收束）
 ```
 
 ### 视角 B：两种"拆任务"机制对比
@@ -129,6 +132,8 @@ demo6 引入的几个概念，在产品级 Runtime 里有更通用的名字：
 | Hook | **Lifecycle Extension** | 在生命周期点（Pre/Post/SessionStart…）插扩展逻辑 |
 | demo2 compact / caching | **Runtime Optimization** | 管理上下文窗口、压成本 |
 | Sandbox（demo6 第 5 章演进方向） | **Execution Isolation** | 限制工具执行的爆炸半径 |
+
+> Runtime 视角的收束点正是 demo7：手搓 Runtime（demo1-6 的 agent.py）走到底，另一条工业化路线是把 Runtime 交给框架（LangGraph 的图 + Checkpointer + interrupt）——六轴概念在框架里各有一个对应物，见 demo7 的映射总表。
 
 > 这个视角不改 demo6 的定位——demo6 仍是「base × 约束」这条单轴。Runtime 是把 6 个 demo 串起来的**整合视角**：学完 6 轴，你脑子里就拼出了一个完整 Agent Runtime 的骨架。
 
@@ -178,6 +183,7 @@ demo6 这个例外恰好画出了上下文工程的边界：**能用 prompt 引�
 | demo4 | `demo4-plan/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（示例 Skill） |
 | demo5 | `demo5-multiagent/agent.py`（+ `tools.py` / `plan.py` / `skill.py` / `ask.py` / `subagent.py` / `jobs.py` / `tui.py` / `render.py` / `memory.py` / `session.py` / `commands.py`） | `skills/review.md`（继承 demo4） |
 | demo6 | `demo6-safety/agent.py`（+ demo5 十四文件底座 + `permission.py` 约束层） | —（约束层全在 `permission.py`） |
+| demo7 | `demo7-langgraph/agent.py`（+ `tools.py` 与 demo1 逐字相同） | `memory/checkpoints.sqlite`（运行时生成：Checkpointer 会话快照） |
 
 > demo1 是所有后续 demo 的基线——demo2-6 的 `agent.py` 都从 demo1 的单文件结构（现保留为 `agent_single.py`）扩展而来（Part 1 LLM 客户端 / Part 2 工具 / Part 3 ReAct 主循环）。demo1 正式版已拆分为 `agent.py`（主入口）+ `tools.py`（工具层）+ `render.py`（渲染层）+ `commands.py`（命令层）+ `stats.py`（Stats 层）+ `logger.py`（日志层）；**demo2–6 全部已迁移多文件结构**（demo2 新增 `memory.py` 记忆层；demo3 加 `mcp.py`；demo4 加 `plan.py` 规划层 + `skill.py` Skill 层 + `ask.py` 提问层；demo5 加 `subagent.py` 多 Agent 层（后台执行 + 完成通知）+ `jobs.py` 后台任务层（shell/agent job 共用注册表、日志落盘、通知注入）+ `tui.py` 行内渲染 TUI，基于 demo4 底座（规划轴三件 + 记忆全继承、token 阈值自动压缩；demo3 的 MCP 依赖模拟 server 不带）；demo6 基于 demo5 十四文件底座，加 `permission.py` 约束层（Permission 规则引擎 + Hook + `dispatch_tool` 串进共用循环 + 审批冒泡——Subagent 的 ask 入队挂起、主循环空闲弹层，主/子一体受控））。
 
@@ -193,7 +199,7 @@ demo5 只实现 **Subagent**（一次性外包，对应 Claude Code 的 Task too
 
 demo1 → demo2 → demo3 → demo4 → demo5 → demo6
 
-demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以按兴趣调整顺序，但建议先记忆（demo2）再工具（demo3）——记忆轴轻量内闭环，工具轴涉及 MCP 协议认知门槛更高。
+demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以按兴趣调整顺序，但建议先记忆（demo2）再工具（demo3）——记忆轴轻量内闭环，工具轴涉及 MCP 协议认知门槛更高。demo7（对照篇）建议最后学——六条轴都见过后再看框架对照，每个映射都有落点。
 
 ### 路径 2：按主题
 
@@ -205,6 +211,7 @@ demo1 是所有后续 demo 的代码基线。学完 demo1 后，demo2-6 可以�
 | 规划 / Skills | demo4 |
 | 多 Agent 系统 | demo5（Subagent） |
 | Agent 安全 | demo6（两层 Control Plane） |
+| LangGraph / 手搓 vs 框架 | demo7（对照篇：循环 / 约束 / 记忆三轴代码实现） |
 
 ### 路径 3：看真实运行
 
@@ -232,6 +239,7 @@ demo3: = base × 工具扩展
 demo4: = base × 规划
 demo5: = base × 多 Agent
 demo6: = base × 约束
+demo7: = base × 框架（对照篇）
 ```
 
 ---
