@@ -7,6 +7,10 @@ __pycache__/
 # 运行时产物
 **/todos.md
 **/logs/
+# LangGraph 教学会话练习产物（lg_drill + drills 题解，不进 git）
+lg_drill.py
+drill.sqlite
+drills/
 demo2-memory/memory/
 demo3-tools/memory/
 demo4-plan/memory/
@@ -37,3 +41,4 @@ demo5-multiagent/jobs/
 demo7-langgraph/memory/
 demo6-safety/memory/
 demo6-safety/jobs/
+t5_exp*.sqlite
